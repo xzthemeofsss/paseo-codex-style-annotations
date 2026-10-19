@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900">
+  <rect width="1600" height="900" fill="#1A211D"/>
+  <g font-family="Arial, Helvetica, sans-serif">
+    <text x="72" y="104" font-size="62" font-weight="700" letter-spacing="-1.8" fill="#F3F5F2">From the place you're working.</text>
+    <text x="76" y="162" font-size="30" fill="#BEC8BE">Select code, a changed range, or a terminal error.</text>
+    <rect x="72" y="221" width="728" height="436" rx="20" fill="#242E27" stroke="#46534A"/>
+    <text x="100" y="269" font-size="25" fill="#BEC8BE">File editor</text>
+    <text x="100" y="313" font-size="25" fill="#F3F5F2">src/api.ts</text>
+    <line x1="100" y1="339" x2="772" y2="339" stroke="#46534A"/>
+    <g font-family="Menlo, Consolas, monospace" font-size="27">
+      <g fill="#8A9A8C"><text x="101" y="393">24</text><text x="101" y="441">25</text><text x="101" y="489">26</text><text x="101" y="537">27</text></g>
+      <text x="161" y="393" fill="#D6DFC9">const response = await fetch(url);</text>
+      <rect x="153" y="410" width="614" height="91" fill="#E8D996" fill-opacity=".23"/>
+      <text x="161" y="441" fill="#F3F5F2">if (!response.ok) {</text>
+      <text x="161" y="489" fill="#F3F5F2">  throw new Error("Request failed");</text>
+      <text x="161" y="537" fill="#D6DFC9">}</text>
+    </g>
+    <text x="100" y="612" font-size="25" fill="#BEC8BE">Keep the selection and its source path.</text>
+    <rect x="836" y="221" width="692" height="206" rx="20" fill="#242E27" stroke="#46534A"/>
+    <text x="864" y="269" font-size="25" fill="#BEC8BE">Diff</text>
+    <text x="864" y="311" font-size="25" fill="#F3F5F2">src/retry.ts · modified side</text>
+    <rect x="858" y="337" width="648" height="51" fill="#A7C080" fill-opacity=".16"/>
+    <text x="875" y="372" font-family="Menlo, Consolas, monospace" font-size="28" fill="#D6DFC9">+ const maxAttempts = 3;</text>
+    <rect x="836" y="455" width="692" height="202" rx="20" fill="#242E27" stroke="#46534A"/>
+    <text x="864" y="504" font-size="25" fill="#BEC8BE">Terminal output</text>
+    <text x="864" y="551" font-family="Menlo, Consolas, monospace" font-size="27" fill="#D6DFC9">$ npm run check</text>
+    <rect x="858" y="572" width="648" height="49" fill="#E8D996" fill-opacity=".23"/>
+    <text x="864" y="606" font-family="Menlo, Consolas, monospace" font-size="26" fill="#F3F5F2">Error: connection timed out</text>
+    <rect x="72" y="704" width="635" height="72" rx="16" fill="#F3F5F2"/>
+    <text x="100" y="750" font-size="29" fill="#202B27">Add to Checkout fix</text>
+    <line x1="635" y1="717" x2="635" y2="763" stroke="#CFD7CF"/>
+    <path d="m659 737 10 10 10-10" fill="none" stroke="#627069" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="749" y="734" font-size="27" fill="#F3F5F2">Defaults to your last focused chat.</text>
+    <text x="749" y="773" font-size="25" fill="#BEC8BE">Use the arrow to choose another in this workspace.</text>
+    <text x="76" y="839" font-size="23" fill="#A4B0A7">Interface illustrations with sample content. Chat and Markdown preview are also supported.</text>
+  </g>
+</svg>

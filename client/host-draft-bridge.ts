@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { decodeAnnotation, encodeAnnotation } from "./format";
 import { QUOTE_PLUGIN_ID, quotePluginIdSchema } from "./quote-identity";
+import { acceptedQuoteSourceTitles, describeError, LocalizedError, text, type LocaleSource } from "./messages";
 
 const callable = z.custom<(...args: unknown[]) => unknown>((value) => typeof value === "function");
 const schema = z.object({ safeParse: callable });
@@ -11,7 +12,7 @@ export const quoteAttachmentSchema = z.object({
   kind: z.literal("plugin_resource"),
   pluginId: quotePluginIdSchema,
   sourceId: z.literal(QUOTE_SOURCE),
-  sourceTitle: z.literal("引用"),
+  sourceTitle: z.string().refine((value) => acceptedQuoteSourceTitles.includes(value)),
   sourceIcon: z.literal("MessageSquareQuote"),
   item: z.object({
     id: quoteId,
@@ -84,12 +85,12 @@ export interface DraftHost {
   validateAttachment(attachment: QuoteAttachment): void;
 }
 
-export function makeQuote(text: string, title: string, url: string): QuoteAttachment {
+export function makeQuote(content: string, title: string, url: string, language?: LocaleSource): QuoteAttachment {
   const id = quoteId.parse(crypto.randomUUID());
   return quoteAttachmentSchema.parse({
     kind: "plugin_resource", pluginId: QUOTE_PLUGIN_ID, sourceId: QUOTE_SOURCE,
-    sourceTitle: "引用", sourceIcon: "MessageSquareQuote",
-    item: { id, identifier: `quote-${id}`, title: title.trim().slice(0, 64) || "引用片段", url, text, resourceType: "quote" },
+    sourceTitle: text(language).quoteSourceTitle, sourceIcon: "MessageSquareQuote",
+    item: { id, identifier: `quote-${id}`, title: title.trim().slice(0, 64) || text(language).quoteSnippet, url, text: content, resourceType: "quote" },
   });
 }
 
@@ -164,23 +165,25 @@ export function bindingStatus(binding: DraftBinding): "ready" | "locked" | "scop
 }
 
 export async function mutateQuotes(options: {
+  language?: LocaleSource;
   host: DraftHost;
   binding: DraftBinding;
   change: { kind: "add"; attachment: QuoteAttachment } | { kind: "remove"; id: QuoteId };
   isCurrent?: () => boolean;
 }): Promise<WriteOutcome> {
   const { host, binding, change } = options;
+  const t = text(options.language);
   const valid = () => (options.isCurrent?.() ?? true) && bindingStatus(binding) === "ready"
     && host.hasAgent(binding.hostId, binding.agentId);
   let key: string;
   let next: DraftInput;
   let matches: (value: unknown) => boolean;
   try {
-    if (!valid()) return { kind: "not-written", reason: "输入框已锁定或会话已切换。", fallback: false };
+    if (!valid()) return { kind: "not-written", reason: t.composerLocked, fallback: false };
     key = host.key(binding.hostId, binding.agentId);
-    if (isStoreBinding(binding) && key !== binding.draftKey) return { kind: "not-written", reason: "接收对话身份已变化。", fallback: false };
+    if (isStoreBinding(binding) && key !== binding.draftKey) return { kind: "not-written", reason: t.recipientIdentityChanged, fallback: false };
     await host.hydrate(key);
-    if (!valid()) return { kind: "not-written", reason: "输入框已锁定或会话已切换。", fallback: false };
+    if (!valid()) return { kind: "not-written", reason: t.composerLocked, fallback: false };
     const previous = host.read(key);
     const current = previous ?? { text: isStoreBinding(binding) ? "" : binding.input.value, attachments: [] };
     if (change.kind === "add") host.validateAttachment(change.attachment);
@@ -190,59 +193,61 @@ export async function mutateQuotes(options: {
     };
     const present = current.attachments.some(matches);
     if (present === (change.kind === "add")) {
-      try { await host.flush(); } catch { return { kind: "uncertain", reason: "注释持久保存未确认，请重试同一操作。" }; }
-      return valid() ? { kind: "committed" } : { kind: "uncertain", reason: "会话已切换，请返回原对话确认注释。" };
+      try { await host.flush(); } catch { return { kind: "uncertain", reason: t.annotationSaveUnconfirmed }; }
+      return valid() ? { kind: "committed" } : { kind: "uncertain", reason: t.chatSwitchedCheck };
     }
     const attachments = change.kind === "add"
       ? [...current.attachments, change.attachment]
       : current.attachments.filter((value) => !matches(value));
     next = { ...current, attachments };
-    if (!valid()) return { kind: "not-written", reason: "会话已切换，注释未写入。", fallback: false };
+    if (!valid()) return { kind: "not-written", reason: t.chatSwitchedNotSaved, fallback: false };
   } catch (cause) {
-    return { kind: "not-written", reason: reason(cause), fallback: !isStoreBinding(binding) };
+    return { kind: "not-written", reason: reason(cause, options.language), fallback: !isStoreBinding(binding) };
   }
   try {
     host.save(key, next);
     const saved = host.read(key);
     if (!saved || saved.attachments.some(matches) !== (change.kind === "add")) {
-      return { kind: "uncertain", reason: "引用保存结果未确认，请检查输入框附件后再操作。" };
+      return { kind: "uncertain", reason: t.quoteSaveUnconfirmed };
     }
   } catch {
-    return { kind: "uncertain", reason: "引用保存结果未确认，请检查输入框附件后再操作。" };
+    return { kind: "uncertain", reason: t.quoteSaveUnconfirmed };
   }
   try {
     await host.flush();
-    if (!valid()) return { kind: "uncertain", reason: "会话已切换，引用保留在原会话的草稿中。" };
+    if (!valid()) return { kind: "uncertain", reason: t.chatSwitchedQuoteKept };
     return { kind: "committed" };
   } catch {
-    return { kind: "uncertain", reason: "引用已加入草稿，持久保存未确认，请勿重复添加。" };
+    return { kind: "uncertain", reason: t.quoteDraftUnconfirmed };
   }
 }
 
 export function writeQuoteComment(options: {
+  language?: LocaleSource;
   host: DraftHost;
   ref: QuoteRef;
   comment: string;
   isCurrent?: () => boolean;
 }): WriteOutcome {
   const { host, ref, comment } = options;
+  const t = text(options.language);
   const { binding, id } = ref;
   let key: string;
   let next: DraftInput;
   try {
     if (!(options.isCurrent?.() ?? true) || bindingStatus(binding) !== "ready" || !host.hasAgent(binding.hostId, binding.agentId)) {
-      return { kind: "not-written", reason: "会话已切换或输入框已锁定，评论尚未保存。返回原会话后可重试。", fallback: false };
+      return { kind: "not-written", reason: t.commentChatSwitched, fallback: false };
     }
     key = host.key(binding.hostId, binding.agentId);
-    if (isStoreBinding(binding) && key !== binding.draftKey) return { kind: "not-written", reason: "接收对话身份已变化。", fallback: false };
+    if (isStoreBinding(binding) && key !== binding.draftKey) return { kind: "not-written", reason: t.recipientIdentityChanged, fallback: false };
     const current = host.read(key);
     const index = current?.attachments.findIndex((value) => {
       const parsed = quoteAttachmentSchema.safeParse(value);
       return parsed.success && parsed.data.item.id === id;
     }) ?? -1;
-    if (!current || index < 0) return { kind: "not-written", reason: "引用已移除或发送，评论未写入。", fallback: false };
+    if (!current || index < 0) return { kind: "not-written", reason: t.quoteGone, fallback: false };
     const attachment = quoteAttachmentSchema.parse(current.attachments[index]);
-    const decoded = decodeAnnotation(attachment.item);
+    const decoded = decodeAnnotation(attachment.item, options.language);
     if (decoded.kind === "invalid") return { kind: "not-written", reason: decoded.reason, fallback: false };
     const { subtitle: previousComment, ...item } = attachment.item;
     const updated = { ...attachment, item: { ...item, ...encodeAnnotation({ quote: decoded.annotation.quote, comment }) } };
@@ -250,16 +255,16 @@ export function writeQuoteComment(options: {
     const attachments = [...current.attachments];
     attachments[index] = updated;
     next = { ...current, attachments };
-    if (!(options.isCurrent?.() ?? true) || bindingStatus(binding) !== "ready") return { kind: "not-written", reason: "接收对话已切换，评论未保存。", fallback: false };
+    if (!(options.isCurrent?.() ?? true) || bindingStatus(binding) !== "ready") return { kind: "not-written", reason: t.recipientSwitchedComment, fallback: false };
   } catch (cause) {
-    return { kind: "not-written", reason: reason(cause), fallback: false };
+    return { kind: "not-written", reason: reason(cause, options.language), fallback: false };
   }
   try {
     host.save(key, next);
-    if (!sameContent(host.read(key), next)) return { kind: "uncertain", reason: "评论写入结果未确认，输入内容已保留，可重试。" };
+    if (!sameContent(host.read(key), next)) return { kind: "uncertain", reason: t.commentWriteUnconfirmed };
     return { kind: "committed" };
   } catch (cause) {
-    return { kind: "uncertain", reason: `评论写入结果未确认，输入内容已保留。${reason(cause)}` };
+    return { kind: "uncertain", reason: t.commentWriteUnconfirmedWith(reason(cause, options.language)) };
   }
 }
 
@@ -272,9 +277,9 @@ function sameContent(left: unknown, right: unknown): boolean {
     && sameContent(Reflect.get(left, key), Reflect.get(right, key)));
 }
 
-export function reason(cause: unknown): string { return cause instanceof Error ? cause.message : String(cause); }
+export function reason(cause: unknown, language?: LocaleSource): string { return describeError(cause, language); }
 
-export function resolveModuleIds(source: string, signatures: Record<string, readonly string[]>): Record<string, number> {
+export function resolveModuleIds(source: string, signatures: Record<string, readonly string[]>, language?: LocaleSource): Record<string, number> {
   const chunks = source.split(/(?=__d\(function\()/);
   const result: Record<string, number> = {};
   for (const [name, exports] of Object.entries(signatures)) {
@@ -284,7 +289,7 @@ export function resolveModuleIds(source: string, signatures: Record<string, read
       const match = chunk.match(/\},(\d+),\[[\d,]*\]\);/);
       return match ? [Number(match[1])] : [];
     });
-    if (matching.length !== 1) throw new Error(`当前 Paseo 的 ${name} 契约不明确，使用普通引用。`);
+    if (matching.length !== 1) throw new LocalizedError((m) => m.moduleContractUnclear(name), language);
     result[name] = matching[0];
   }
   return result;
@@ -297,13 +302,14 @@ export const MODULE_SIGNATURES = {
   sessions: ["useSessionStore", "normalizeWorkspaceDescriptor"],
 };
 const parseResultSchema = z.discriminatedUnion("success", [z.object({ success: z.literal(true), data: z.unknown() }), z.object({ success: z.literal(false) })]);
-function hostParse(contract: z.infer<typeof schema>, value: unknown): unknown {
+function hostParse(contract: z.infer<typeof schema>, value: unknown, language?: LocaleSource): unknown {
   const result = parseResultSchema.parse(contract.safeParse(value));
-  if (!result.success) throw new Error("Paseo 草稿格式已变化，使用普通引用。");
+  if (!result.success) throw new LocalizedError((m) => m.draftFormatChanged, language);
   return result.data;
 }
 
-export function createDraftHost(requireModule: (id: number) => unknown, ids: Record<string, number>): DraftHost {
+export function createDraftHost(requireModule: (id: number) => unknown, ids: Record<string, number>, language?: LocaleSource): DraftHost {
+  const t = () => text(language);
   const module = z.object({ useDraftStore: storeSchema, flushDraftPersistStorage: callable }).parse(requireModule(ids.store));
   const drafts = z.object({ CanonicalDraftInputSchema: schema }).parse(requireModule(ids.draft));
   const keys = z.object({ buildDraftStoreKey: callable }).parse(requireModule(ids.keys));
@@ -311,18 +317,18 @@ export function createDraftHost(requireModule: (id: number) => unknown, ids: Rec
   const sessions = z.object({ useSessionStore: z.preprocess((value) => properties(value, ["getState"]), z.object({ getState: callable })) }).parse(requireModule(ids.sessions));
   const state = () => stateSchema.parse(module.useDraftStore.getState());
   const validateAttachment = (attachment: QuoteAttachment) => {
-    const parsed = quoteAttachmentSchema.parse(hostParse(resource.PluginResourceComposerAttachmentSchema, attachment));
-    if (parsed.item.url !== attachment.item.url || parsed.item.id !== attachment.item.id || parsed.item.subtitle !== attachment.item.subtitle) throw new Error("Paseo 无法完整保留评论，引用未修改。");
+    const parsed = quoteAttachmentSchema.parse(hostParse(resource.PluginResourceComposerAttachmentSchema, attachment, language));
+    if (parsed.item.url !== attachment.item.url || parsed.item.id !== attachment.item.id || parsed.item.subtitle !== attachment.item.subtitle) throw new Error(t().commentNotKept);
     const converted = z.object({ type: z.literal("text"), mimeType: z.literal("text/plain"), text: z.string() }).parse(resource.pluginResourceAttachmentToAgentAttachment(parsed));
-    if (converted.text !== attachment.item.text) throw new Error("Paseo 无法完整保留引用，使用普通引用。");
-    const canonical = readQuotes(inputSchema.parse(hostParse(drafts.CanonicalDraftInputSchema, { text: "", attachments: [attachment] })))[0];
+    if (converted.text !== attachment.item.text) throw new Error(t().quoteNotKept);
+    const canonical = readQuotes(inputSchema.parse(hostParse(drafts.CanonicalDraftInputSchema, { text: "", attachments: [attachment] }, language)))[0];
     if (!canonical || canonical.item.url !== attachment.item.url || canonical.item.id !== attachment.item.id || canonical.item.text !== attachment.item.text || canonical.item.subtitle !== attachment.item.subtitle) {
-      throw new Error("Paseo 草稿无法完整保留引用和评论，引用未修改。");
+      throw new Error(t().draftNotKept);
     }
   };
-  const probe = makeQuote("> 契约检查\n> 第二行", "引用片段", "https://paseo.sh/");
+  const probe = makeQuote("> contract check\n> second line", "Quote snippet", "https://paseo.sh/", language);
   validateAttachment(probe);
-  validateAttachment({ ...probe, item: { ...probe.item, ...encodeAnnotation({ quote: probe.item.text, comment: "多行评论\n第二行" }) } });
+  validateAttachment({ ...probe, item: { ...probe.item, ...encodeAnnotation({ quote: probe.item.text, comment: "multi-line comment\nsecond line" }) } });
   state();
   return {
     key: (hostId, agentId) => z.string().min(1).parse(keys.buildDraftStoreKey({ serverId: hostId, agentId })),
@@ -336,10 +342,10 @@ export function createDraftHost(requireModule: (id: number) => unknown, ids: Rec
     read: (key) => {
       const raw = state().getDraftInput(key);
       if (raw == null) return undefined;
-      hostParse(drafts.CanonicalDraftInputSchema, raw);
+      hostParse(drafts.CanonicalDraftInputSchema, raw, language);
       return inputSchema.parse(raw);
     },
-    save: (key, input) => { hostParse(drafts.CanonicalDraftInputSchema, input); state().saveDraftInput({ draftKey: key, draft: input }); },
+    save: (key, input) => { hostParse(drafts.CanonicalDraftInputSchema, input, language); state().saveDraftInput({ draftKey: key, draft: input }); },
     flush: async () => { await module.flushDraftPersistStorage(); },
     subscribe: (listener) => {
       const unsubscribe = callable.parse(module.useDraftStore.subscribe(listener));
@@ -349,7 +355,7 @@ export function createDraftHost(requireModule: (id: number) => unknown, ids: Rec
   };
 }
 
-export async function discoverDraftHost(signal: AbortSignal): Promise<DraftHost> {
+export async function discoverDraftHost(signal: AbortSignal, language?: LocaleSource): Promise<DraftHost> {
   const runtime = z.object({ __r: callable }).parse(globalThis);
   const base = new URL(window.location.href);
   const urls = Array.from(document.scripts).flatMap((script) => {
@@ -361,10 +367,10 @@ export async function discoverDraftHost(signal: AbortSignal): Promise<DraftHost>
     const response = await fetch(url, { signal });
     if (!response.ok) continue;
     const source = await response.text();
-    if (signal.aborted) throw new Error("引用插件已关闭。");
+    if (signal.aborted) throw new LocalizedError((m) => m.quotePluginClosed, language);
     if (!source.includes("flushDraftPersistStorage")) continue;
-    const ids = resolveModuleIds(source, MODULE_SIGNATURES);
-    return createDraftHost((id) => runtime.__r(id), ids);
+    const ids = resolveModuleIds(source, MODULE_SIGNATURES, language);
+    return createDraftHost((id) => runtime.__r(id), ids, language);
   }
-  throw new Error("未找到 Paseo 草稿接口，使用普通引用。");
+  throw new LocalizedError((m) => m.draftApiNotFound, language);
 }

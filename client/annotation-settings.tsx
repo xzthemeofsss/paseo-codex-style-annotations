@@ -4,6 +4,7 @@ import { useSettings } from "@getpaseo/plugin/client";
 import { SettingsAction, SettingsCard, SettingsRow, SettingsSection, SettingsSwitch } from "@getpaseo/plugin/client/ui";
 import { annotationValuesSchema, preferences, type AnnotationKind } from "../shared/preferences";
 import type { AnnotationPreferences } from "./annotation-preferences";
+import { messages } from "./messages";
 import { createSettingsLanguage, englishSettingsLocale, type SettingsLanguage, type SettingsLocale } from "./settings-language";
 
 type SettingsCopy = {
@@ -22,7 +23,7 @@ const settingsCopy: Record<SettingsLocale, SettingsCopy> = {
     title: "Annotation types",
     sectionTitle: "Add annotations",
     sectionInfo: "Only affects new annotations. Saved annotations can still be viewed, edited, and removed. Side chat remains available.",
-    kinds: { chat: "Chat selections", file: "Files and read-only code", diff: "Diff selections", markdown: "Markdown preview", terminal: "Terminal output" },
+    kinds: messages.en.kinds,
     loading: "Loading annotation settings…",
     unavailable: "Annotation settings unavailable",
     unsaved: "Settings not saved",
@@ -33,7 +34,7 @@ const settingsCopy: Record<SettingsLocale, SettingsCopy> = {
     title: "注释类型",
     sectionTitle: "添加注释",
     sectionInfo: "只影响新注释。已保存的注释仍可查看、编辑和移除。聊天侧边提问继续可用。",
-    kinds: { chat: "聊天选区", file: "文件与只读代码", diff: "Diff 选区", markdown: "Markdown 预览", terminal: "终端输出" },
+    kinds: messages.zh.kinds,
     loading: "正在读取注释设置…",
     unavailable: "注释设置不可用",
     unsaved: "设置尚未保存",

@@ -10,5 +10,4 @@ export const annotationValuesSchema = z.object({
 }).strict();
 export type AnnotationValues = z.infer<typeof annotationValuesSchema>;
 export type AnnotationKind = keyof AnnotationValues;
-export const annotationLabels: Record<AnnotationKind, string> = { chat: "聊天选区", file: "文件与只读代码", diff: "Diff 选区", markdown: "Markdown 预览", terminal: "终端输出" };
 export const preferences = defineSettings({ id: "annotation-kinds", scope: "host", version: 1, schema: annotationValuesSchema });

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { decodeAnnotation } from "./format";
+import { acceptedSourcePrefixes, text, type LocaleSource } from "./messages";
 
 const name = z.string().min(1).max(2048);
 const integer = z.number().int().nonnegative();
@@ -25,18 +26,18 @@ const envelope = z.object({ v: z.literal(1), origin: externalOriginSchema, prefi
 const FRAGMENT = "paseo-annotation=";
 export const MAX_LOCATOR_LENGTH = 16_384;
 
-export function encodeExternal(snapshot: ExternalSnapshot, sourceUrl: string): { url: string; text: string } {
+export function encodeExternal(snapshot: ExternalSnapshot, sourceUrl: string, language?: LocaleSource): { url: string; text: string } {
   const url = new URL(sourceUrl);
   const source = externalOriginSchema.parse(snapshot.origin);
-  const prefix = `引用来源：${snapshot.title.slice(0, 128)}\n\n`;
+  const prefix = `${text(language).sourcePrefix}${snapshot.title.slice(0, 128)}\n\n`;
   const suffix = "";
   const fragment = `${FRAGMENT}${encodeURIComponent(JSON.stringify({ v: 1, origin: source, prefix, suffix }))}`;
-  if (fragment.length > MAX_LOCATOR_LENGTH) throw new Error("原文定位信息过长，注释未添加。");
+  if (fragment.length > MAX_LOCATOR_LENGTH) throw new Error(text(language).locatorTooLong);
   url.hash = fragment;
   return { url: url.href, text: prefix + snapshot.text + suffix };
 }
 
-export function decodeExternal(item: { url: string; text: string; subtitle?: string }):
+export function decodeExternal(item: { url: string; text: string; subtitle?: string }, language?: LocaleSource):
   | { kind: "legacy" }
   | { kind: "invalid"; reason: string }
   | { kind: "external"; snapshot: ExternalSnapshot; comment: string } {
@@ -47,16 +48,16 @@ export function decodeExternal(item: { url: string; text: string; subtitle?: str
   try {
     if (fragment.length > MAX_LOCATOR_LENGTH) throw new Error("locator too long");
     const data = envelope.parse(JSON.parse(decodeURIComponent(fragment.slice(FRAGMENT.length))));
-    const decoded = decodeAnnotation(item);
+    const decoded = decodeAnnotation(item, language);
     if (decoded.kind !== "editable") throw new Error(decoded.reason);
     const quote = decoded.annotation.quote;
     if (!quote.startsWith(data.prefix) || !quote.endsWith(data.suffix) || quote.length < data.prefix.length + data.suffix.length) throw new Error("snapshot text mismatch");
-    return { kind: "external", snapshot: { text: quote.slice(data.prefix.length, data.suffix ? -data.suffix.length : undefined), title: data.prefix.replace(/^引用来源：/, "").trimEnd(), origin: data.origin }, comment: decoded.annotation.comment };
-  } catch { return { kind: "invalid", reason: "原文定位信息无法验证，已保留完整引用。" }; }
+    return { kind: "external", snapshot: { text: quote.slice(data.prefix.length, data.suffix ? -data.suffix.length : undefined), title: data.prefix.slice(acceptedSourcePrefixes.find((entry) => data.prefix.startsWith(entry))?.length ?? 0).trimEnd(), origin: data.origin }, comment: decoded.annotation.comment };
+  } catch { return { kind: "invalid", reason: text(language).locatorInvalid }; }
 }
 
-export function fingerprint(text: string): Promise<z.infer<typeof version>> {
-  if (!globalThis.crypto?.subtle) throw new Error("当前客户端无法验证原文指纹，请使用安全连接。现在无法添加原文注释。");
-  const bytes = new TextEncoder().encode(text);
+export function fingerprint(content: string, language?: LocaleSource): Promise<z.infer<typeof version>> {
+  if (!globalThis.crypto?.subtle) throw new Error(text(language).fingerprintUnavailable);
+  const bytes = new TextEncoder().encode(content);
   return crypto.subtle.digest("SHA-256", bytes).then((hash) => ({ algorithm: "sha256", digest: Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join("") }));
 }

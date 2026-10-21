@@ -1,7 +1,8 @@
 import { settingsRpc } from "@getpaseo/plugin";
 import type { PluginClientContext } from "@getpaseo/plugin/client";
 import { z } from "zod";
-import { annotationLabels, annotationValuesSchema, preferences, type AnnotationKind, type AnnotationValues } from "../shared/preferences";
+import { text, type LocaleSource } from "./messages";
+import { annotationValuesSchema, preferences, type AnnotationKind, type AnnotationValues } from "../shared/preferences";
 
 export type PreferenceState = { status: "loading" } | { status: "ready"; values: AnnotationValues } | { status: "error"; error: string };
 export interface AnnotationPreferences {
@@ -9,7 +10,7 @@ export interface AnnotationPreferences {
   refresh(): Promise<void>;
   accept(values: AnnotationValues): void;
   enabled(kind: AnnotationKind): boolean;
-  check(kind: AnnotationKind): Promise<{ allowed: true } | { allowed: false; reason: string }>;
+  check(kind: AnnotationKind, language?: LocaleSource): Promise<{ allowed: true } | { allowed: false; reason: string }>;
   subscribe(listener: () => void): () => void;
   dispose(): void;
 }
@@ -35,13 +36,14 @@ export function createAnnotationPreferences(client: Pick<PluginClientContext, "r
   const controller: AnnotationPreferences = {
     state: () => state, refresh, enabled,
     accept(values) { generation++; publish({ status: "ready", values: annotationValuesSchema.parse(values) }); },
-    async check(kind) {
+    async check(kind, language) {
+      const t = text(language);
       for (let attempt = 0; attempt < 2; attempt++) {
         const before = generation; await refresh();
         if (before !== generation) continue;
-        return enabled(kind) ? { allowed: true } : { allowed: false, reason: state.status === "error" ? `注释设置读取失败：${state.error}。请在插件设置中重试。` : state.status === "loading" ? "正在读取注释设置，请稍后重试。" : `${annotationLabels[kind]}注释已关闭，可在插件设置中开启。` };
+        return enabled(kind) ? { allowed: true } : { allowed: false, reason: state.status === "error" ? t.prefsLoadFailed(state.error) : state.status === "loading" ? t.prefsLoading : t.prefsDisabled(t.kinds[kind]) };
       }
-      return { allowed: false, reason: "注释设置正在变化，请重试。" };
+      return { allowed: false, reason: t.prefsChanging };
     },
     subscribe(listener) { if (disposed) return () => {}; listeners.add(listener); return () => { listeners.delete(listener); }; },
     dispose() { disposed = true; generation++; listeners.clear(); },

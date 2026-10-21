@@ -148,7 +148,7 @@ for (const operation of ["save", "delete"] as const) {
       hold = false; release?.();
       await settle();
       assert.equal(element.isConnected, true, "uncertainty remains visible even after local deletion");
-      assert.match(element.shadowRoot?.querySelector(".status")?.textContent ?? "", /未确认/);
+      assert.match(element.shadowRoot?.querySelector(".status")?.textContent ?? "", /confirm/);
       assert.equal(action("cancel").disabled, false);
       assert.equal(field.disabled, true);
       assert.equal(readQuotes(host.read(key)).length, operation === "delete" ? 0 : 1);
@@ -241,7 +241,7 @@ for (const operation of ["save", "delete"] as const) {
 test("当前真实 bundle 按语义唯一定位模块，不依赖 Metro 数字", async () => {
   const ids = resolveModuleIds(bundle, MODULE_SIGNATURES);
   assert.equal(new Set(Object.values(ids)).size, 5);
-  assert.throws(() => resolveModuleIds(bundle + bundle, MODULE_SIGNATURES), /契约不明确/);
+  assert.throws(() => resolveModuleIds(bundle + bundle, MODULE_SIGNATURES), /contract is unclear/);
   const { host, converter } = await nativeHost();
   assert.equal(host.key("fixture-host", "agent-one"), "agent:fixture-host:agent-one");
   assert.equal(host.hasAgent("fixture-host", "agent-one"), true);
@@ -314,7 +314,7 @@ test("hydrate 等待中切换 agent 或锁定输入框不写入任何会话", as
     if (changeScope) dom.window.document.querySelector('[aria-selected="true"]')?.setAttribute("data-testid", "workspace-tab-agent_agent-two");
     else input.readOnly = true;
     resume?.();
-    assert.deepEqual(await pending, { kind: "not-written", reason: "输入框已锁定或会话已切换。", fallback: false });
+    assert.deepEqual(await pending, { kind: "not-written", reason: "The composer is locked or the chat changed.", fallback: false });
     assert.equal(writes, 0);
     dom.window.close();
   }
@@ -364,7 +364,7 @@ test("chip 从原生草稿派生计数、只读预览、Esc 避开宿主 window 
   await settle();
   const chip = wrapper.querySelector("[data-paseo-quote-chip]");
   const button = chip?.shadowRoot?.querySelector("button");
-  assert.equal(button?.textContent, "2 条注释");
+  assert.equal(button?.textContent, "2 annotations");
   assert.equal(tray.hasAttribute("data-paseo-quote-hidden"), true);
   assert.equal(tray.children[0].hasAttribute("data-paseo-quote-hidden"), true);
   assert.equal(input.value, "");
@@ -390,7 +390,7 @@ test("chip 从原生草稿派生计数、只读预览、Esc 避开宿主 window 
   remove.click();
   await settle();
   assert.deepEqual(readQuotes(host.read(key)).map((entry) => entry.item.id), [entries[1].item.id]);
-  assert.equal(button?.textContent, "1 条注释");
+  assert.equal(button?.textContent, "1 annotation");
   const other = dom.window.document.createElement("div");
   other.textContent = "其他附件";
   tray.append(other);
@@ -470,11 +470,11 @@ test("middle removal preserves keyed rows and scroll; summary follows current ch
   selectionRect = rect(100, -100, 100, 20); binding.anchor.dispatchEvent(new dom.window.Event("scroll"));
   await new Promise((resolve) => setTimeout(resolve, 25));
   assert.equal(editor?.querySelector("textarea"), field); assert.equal(field.value, "keep typed comment");
-  assert.equal(editor?.shadowRoot?.querySelector(".location")?.textContent, "原文在可视区域外");
+  assert.equal(editor?.shadowRoot?.querySelector(".location")?.textContent, "Source is out of view");
   anchor.remove();
   await new Promise((resolve) => setTimeout(resolve, 25));
   assert.equal(editor?.querySelector("textarea"), field);
-  assert.equal(editor?.shadowRoot?.querySelector(".location")?.textContent, "原文位置不可用");
+  assert.equal(editor?.shadowRoot?.querySelector(".location")?.textContent, "Source location unavailable");
   assert.equal(host.read(key)?.text, "unchanged body"); assert.deepEqual(host.read(key)?.attachments[0], other);
   plugin.dispose();
   assert.equal(dom.window.document.querySelector("[data-paseo-quote-source],[data-paseo-quote-editor],[data-paseo-quote-preview]"), null);

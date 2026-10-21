@@ -12,7 +12,7 @@ Paseo 0.11.4 or later with native plugin Settings support is required. Disable t
 
 The Annotation types settings control chat, file, Diff, Markdown, and terminal capture independently. All five start enabled. These host settings affect new annotations; saved annotations and chat side questions remain available. Read failures and save conflicts are visible and preserve saved values.
 
-Settings, the selection toolbar, and the side-question editor follow Paseo's English or Chinese language setting, with English as the fallback. Some annotation popovers still use Chinese labels.
+Settings, the selection toolbar, annotation popovers, and messages follow Paseo's English or Chinese language setting, with English as the fallback.
 
 ## Data and limits
 

@@ -47,7 +47,7 @@ test("两文字入口立即添加、紧凑可选评论、连续输入，Enter/Es
   const popup = dom.window.document.querySelector("[data-paseo-quote-editor]");
   const field = popup?.querySelector("textarea");
   if (!(field instanceof dom.window.HTMLTextAreaElement)) throw new Error("Missing optional comment field");
-  assert.equal(field.placeholder, "添加可选评论...");
+  assert.equal(field.placeholder, "Add an optional comment...");
   assert.equal(field.rows, 1);
   assert.equal(popup?.getAttribute("style")?.includes("width: 294px"), true);
   assert.equal(dom.window.document.activeElement, field);
@@ -128,7 +128,7 @@ test("评论保存失败保留文本并重试同 ID，完成按钮 Escape 的 na
   field.value = "持久保存失败的文本";
   field.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
   await settle();
-  assert.match(popup?.shadowRoot?.querySelector(".status")?.textContent ?? "", /持久保存未确认/);
+  assert.match(popup?.shadowRoot?.querySelector(".status")?.textContent ?? "", /confirm/);
   assert.equal(field.value, "持久保存失败的文本");
   assert.equal(readQuotes(host.read(key))[0].item.id, id);
   fail = false;

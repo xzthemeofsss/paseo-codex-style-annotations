@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { LocalizedError, text as messagesFor, type LocaleSource } from "./messages";
 import { resolveModuleIds, reason, type StoreBinding } from "./host-draft-bridge";
 import { fingerprint, type ExternalOrigin, type ExternalSnapshot, type FileIdentity, type WorkspaceIdentity } from "./external-origin";
 import type { ExternalLiveSource, SourceGeometry } from "./quote-sources";
@@ -41,27 +42,28 @@ function sameTarget(a: unknown, b: unknown): boolean { return JSON.stringify(a) 
 
 interface Fiber { type: unknown; stateNode: unknown; memoizedProps: unknown; memoizedState: unknown; updateQueue: unknown; child: unknown; sibling: unknown; return: unknown }
 const fiberSchema = z.custom<Fiber>((value) => !!value && typeof value === "object" && "memoizedProps" in value && "return" in value);
-export function currentFibers(root: HTMLElement): Array<{ fiber: Fiber; ancestors: Fiber[] }> {
+export function currentFibers(root: HTMLElement, language?: LocaleSource): Array<{ fiber: Fiber; ancestors: Fiber[] }> {
+  const t = messagesFor(language);
   const keys = Object.getOwnPropertyNames(root).filter((key) => key.startsWith("__reactFiber$"));
-  if (keys.length !== 1) throw new Error("无法验证原文组件。");
+  if (keys.length !== 1) throw new Error(t.sourceComponentUnverified);
   let seed = fiberSchema.parse(field(root, keys[0]));
   let depth = 0;
-  while (seed.return) { if (++depth > 1000) throw new Error("原文组件层级异常。"); seed = fiberSchema.parse(seed.return); }
+  while (seed.return) { if (++depth > 1000) throw new Error(t.sourceComponentDepth); seed = fiberSchema.parse(seed.return); }
   const current = fiberSchema.parse(field(seed.stateNode, "current"));
   const stack = [{ fiber: current, ancestors: [] as Fiber[] }], result: Array<{ fiber: Fiber; ancestors: Fiber[] }> = [], seen = new Set<Fiber>();
   while (stack.length) {
     const entry = stack.pop(); if (!entry || seen.has(entry.fiber)) continue;
-    seen.add(entry.fiber); if (seen.size > 100_000) throw new Error("原文组件数量异常。");
+    seen.add(entry.fiber); if (seen.size > 100_000) throw new Error(t.sourceComponentCount);
     result.push(entry);
     if (entry.fiber.sibling) stack.push({ fiber: fiberSchema.parse(entry.fiber.sibling), ancestors: entry.ancestors });
     if (entry.fiber.child) stack.push({ fiber: fiberSchema.parse(entry.fiber.child), ancestors: [...entry.ancestors, entry.fiber] });
   }
   return result;
 }
-function hooks(fiber: Fiber): unknown[] {
+function hooks(fiber: Fiber, language?: LocaleSource): unknown[] {
   const result: unknown[] = [];
   for (let hook = fiber.memoizedState; hook; hook = field(hook, "next")) {
-    if (result.length > 1000) throw new Error("原文组件状态异常。");
+    if (result.length > 1000) throw new Error(messagesFor(language).sourceComponentState);
     result.push(field(hook, "memoizedState"));
   }
   return result;
@@ -84,8 +86,9 @@ export interface SourceHost {
   dispose(): void;
 }
 
-export function createSourceHost(requireModule: (id: number) => unknown, source: string): SourceHost {
-  const ids = resolveModuleIds(source, SOURCE_MODULE_SIGNATURES);
+export function createSourceHost(requireModule: (id: number) => unknown, source: string, language?: LocaleSource): SourceHost {
+  const t = () => messagesFor(language);
+  const ids = resolveModuleIds(source, SOURCE_MODULE_SIGNATURES, language);
   const routes = functions(requireModule(ids.routes), ["parseHostWorkspaceRouteFromPathname"]);
   const identity = functions(requireModule(ids.workspaceIdentity), ["resolveWorkspaceMapKeyByIdentity"]);
   const workspaceKeys = functions(requireModule(ids.workspaceKey), ["buildWorkspaceTabPersistenceKey"]);
@@ -97,7 +100,7 @@ export function createSourceHost(requireModule: (id: number) => unknown, source:
   const capabilities = new Map<string, unknown>();
   const capability = (name: keyof typeof CAPABILITIES): Record<string, number> => {
     if (!capabilities.has(name)) {
-      try { capabilities.set(name, resolveModuleIds(source, CAPABILITIES[name])); } catch (error) { capabilities.set(name, error); }
+      try { capabilities.set(name, resolveModuleIds(source, CAPABILITIES[name], language)); } catch (error) { capabilities.set(name, error); }
     }
     const value = capabilities.get(name); if (value instanceof Error) throw value;
     return z.record(z.string(), z.number()).parse(value);
@@ -109,7 +112,7 @@ export function createSourceHost(requireModule: (id: number) => unknown, source:
     const state = z.object({ sessions: z.record(z.string(), z.unknown()) }).parse(sessions.getState());
     const session = directorySchema.parse(state.sessions[route.serverId]);
     const workspaceId = nonempty.parse(identity.resolveWorkspaceMapKeyByIdentity({ workspaces: session.workspaces, workspaceId: route.workspaceId }));
-    if (context && (context.serverId !== route.serverId || identity.resolveWorkspaceMapKeyByIdentity({ workspaces: session.workspaces, workspaceId: context.workspaceId }) !== workspaceId)) throw new Error("原文不属于当前工作区。");
+    if (context && (context.serverId !== route.serverId || identity.resolveWorkspaceMapKeyByIdentity({ workspaces: session.workspaces, workspaceId: context.workspaceId }) !== workspaceId)) throw new Error(t().sourceNotInWorkspace);
     const workspaceKey = nonempty.parse(workspaceKeys.buildWorkspaceTabPersistenceKey({ serverId: route.serverId, workspaceId }));
     const root = nonempty.parse(selectors.selectWorkspaceDirectory(state, route.serverId, workspaceId));
     return { serverId: route.serverId, workspaceId, workspaceKey, root };
@@ -151,13 +154,13 @@ export function createSourceHost(requireModule: (id: number) => unknown, source:
   window.addEventListener("hashchange", reconcileRoute);
   sampleFocus();
   const contextFor = (root: HTMLElement, entry?: { fiber: Fiber; ancestors: Fiber[] }) => {
-    const found = entry ?? currentFibers(root).find(({ fiber }) => fiber.stateNode === root);
-    if (!found) throw new Error("无法确认原文所属标签。");
+    const found = entry ?? currentFibers(root, language).find(({ fiber }) => fiber.stateNode === root);
+    if (!found) throw new Error(t().sourceTabUnconfirmed);
     const providers = found.ancestors.filter((fiber) => fiber.type === PaneProvider);
-    if (providers.length !== 1) throw new Error("原文所属标签不明确。");
+    if (providers.length !== 1) throw new Error(t().sourceTabUnclear);
     const context = paneContextSchema.parse(field(providers[0].memoizedProps, "value")), workspace = scope(context);
     const tab = tabs(workspace).tabs.find((candidate) => candidate.tabId === context.tabId);
-    if (!tab || !sameTarget(tab.target, context.target)) throw new Error("原文标签已切换。");
+    if (!tab || !sameTarget(tab.target, context.target)) throw new Error(t().sourceTabSwitched);
     return { context, workspace };
   };
   const scopeValid = (workspace: WorkspaceIdentity) => {
@@ -222,7 +225,7 @@ export function createSourceHost(requireModule: (id: number) => unknown, source:
 
   const captureFile = (root: HTMLElement): ExternalSelection => {
     const captured = contextFor(root), valid = sourceGuard(root, captured), { context, workspace } = captured;
-    if (context.target.kind !== "file") throw new Error("原文文件标签无法验证。");
+    if (context.target.kind !== "file") throw new Error(t().sourceFileTabUnverified);
     const file = fileIdentity(field(context.target, "path"), workspace);
     const selectedPreview = root.querySelector('[data-testid="markdown-preview-frame"]'), browserSelection = window.getSelection();
     const previewSelected = selectedPreview instanceof HTMLElement && visible(selectedPreview) && browserSelection && !browserSelection.isCollapsed && browserSelection.rangeCount === 1 && selectedPreview.contains(browserSelection.getRangeAt(0).startContainer) && selectedPreview.contains(browserSelection.getRangeAt(0).endContainer);
@@ -238,10 +241,10 @@ export function createSourceHost(requireModule: (id: number) => unknown, source:
         return { state, doc, slice, lineAt, content: z.string().parse(toString.call(doc)) };
       };
       const { state, doc, slice, lineAt, content } = read(), { from, to } = state.selection.main;
-      if (state.selection.ranges.length !== 1) throw new Error("暂不支持多个不连续的代码选区。");
+      if (state.selection.ranges.length !== 1) throw new Error(t().multipleRanges);
       if (from === to) return null;
       const text = z.string().parse(slice.call(doc, from, to)), lineStart = z.object({ number: z.number().int().positive() }).parse(lineAt.call(doc, from)).number, lineEnd = z.object({ number: z.number().int().positive() }).parse(lineAt.call(doc, to - 1)).number;
-      const snapshot = fingerprint(content).then((version): ExternalSnapshot => ({ text, title: `${file.requestedPath}:${lineStart}-${lineEnd}`, origin: { kind: "file", workspace, tabId: context.tabId, file, from, to, lineStart, lineEnd, version } }));
+      const snapshot = fingerprint(content, language).then((version): ExternalSnapshot => ({ text, title: `${file.requestedPath}:${lineStart}-${lineEnd}`, origin: { kind: "file", workspace, tabId: context.tabId, file, from, to, lineStart, lineEnd, version } }));
       const sourceValid = () => valid() && field(view, "dom") instanceof HTMLElement && root.contains(z.instanceof(HTMLElement).parse(field(view, "dom")));
       const exact = () => { try { return sourceValid() && read().content === content; } catch { return false; } };
       const editorGeometry = () => {
@@ -253,7 +256,7 @@ export function createSourceHost(requireModule: (id: number) => unknown, source:
         return bottom > top ? { ...bounds, rects: [new DOMRect(Math.max(bounds.bounds.left, pa.left), top, Math.max(1, Math.min(bounds.bounds.right, pb.right) - pa.left), bottom - top)] } : { kind: "offscreen" } satisfies SourceGeometry;
       };
       return makeOffer(root, captured, [view, doc, from, to], snapshot, sourceValid, editorGeometry, async () => {
-        if (!exact()) return { kind: "unavailable", reason: "文件内容或编辑器已变化，原文位置不可用。" };
+        if (!exact()) return { kind: "unavailable", reason: t().fileChanged };
         const dispatch = callable.parse(field(view, "dispatch")); dispatch.call(view, { selection: { anchor: from, head: to }, scrollIntoView: true });
         return { kind: "highlighted" };
       });
@@ -265,7 +268,7 @@ export function createSourceHost(requireModule: (id: number) => unknown, source:
     const text = range.toString(); if (!text.length) return null;
     const content = preview.textContent ?? "", start = range.startContainer, end = range.endContainer, startOffset = range.startOffset, endOffset = range.endOffset;
     const exact = () => valid() && preview.textContent === content && range.startContainer === start && range.endContainer === end && range.startOffset === startOffset && range.endOffset === endOffset && range.toString() === text;
-    const snapshot = fingerprint(content).then((version): ExternalSnapshot => ({ text, title: `${file.requestedPath} · Markdown`, origin: { kind: "markdown", workspace, tabId: context.tabId, file, version } }));
+    const snapshot = fingerprint(content, language).then((version): ExternalSnapshot => ({ text, title: `${file.requestedPath} · Markdown`, origin: { kind: "markdown", workspace, tabId: context.tabId, file, version } }));
     const markdownGeometry = (): SourceGeometry => {
       if (!exact()) return { kind: "unavailable" };
       const bounds = geometry(preview); if (bounds.kind !== "visible") return bounds;
@@ -284,14 +287,14 @@ export function createSourceHost(requireModule: (id: number) => unknown, source:
       return rects.length ? { kind: "visible", rects, bounds: { left, right, top, bottom } } : { kind: "offscreen" };
     };
     return makeOffer(root, captured, [preview, content, start, end, startOffset, endOffset], snapshot, valid, markdownGeometry, async () => {
-      if (!exact()) return { kind: "unavailable", reason: "Markdown 预览已变化，原文位置不可用。" };
+      if (!exact()) return { kind: "unavailable", reason: t().markdownChanged };
       const selection = window.getSelection(); selection?.removeAllRanges(); selection?.addRange(range);
       for (let ancestor = preview.parentElement; ancestor && root.contains(ancestor); ancestor = ancestor.parentElement) {
         const style = getComputedStyle(ancestor), rect = ancestor.getBoundingClientRect(), selected = range.getBoundingClientRect();
         if (/auto|scroll/.test(style.overflowY) && ancestor.scrollHeight > ancestor.clientHeight) ancestor.scrollTop += selected.top - rect.top - ancestor.clientTop - Math.min(40, ancestor.clientHeight / 4);
         if (/auto|scroll/.test(style.overflowX) && ancestor.scrollWidth > ancestor.clientWidth) ancestor.scrollLeft += selected.left - rect.left - ancestor.clientLeft;
       }
-      return markdownGeometry().kind === "visible" ? { kind: "highlighted" } : { kind: "unavailable", reason: "Markdown 原文仍在预览可见区域外。" };
+      return markdownGeometry().kind === "visible" ? { kind: "highlighted" } : { kind: "unavailable", reason: t().markdownOffscreen };
     });
   };
 
@@ -299,7 +302,7 @@ export function createSourceHost(requireModule: (id: number) => unknown, source:
     terminalComponent: ["data-terminal-scrollbar-root", "onRendererReadyChange", "useDOMImperativeHandle"],
     terminalRuntime: ["TerminalEmulatorRuntime", "createTerminalResizeEvent", "encodeTerminalOutput", "window.__paseoTerminal"],
     terminalPane: ["TerminalPane=function", "getWorkspaceTerminalSession", "onOpenWorkspaceFile", "terminal-surface"],
-  });
+  }, language);
   interface Terminal {
     element: HTMLElement; cols: number; rows: number;
     getSelection(): string; hasSelection(): boolean; getSelectionPosition(): z.infer<typeof terminalPositionSchema> | undefined;
@@ -323,26 +326,26 @@ export function createSourceHost(requireModule: (id: number) => unknown, source:
   const terminalStreams = new WeakMap<object, string>();
   const terminalBinding = (root: HTMLElement) => {
     const ids = terminalIds(), Component = callable.parse(field(requireModule(ids.terminalComponent), "default")), Runtime = callable.parse(field(requireModule(ids.terminalRuntime), "TerminalEmulatorRuntime")), TerminalPane = callable.parse(field(requireModule(ids.terminalPane), "TerminalPane"));
-    const matches = currentFibers(root).flatMap((entry) => {
+    const matches = currentFibers(root, language).flatMap((entry) => {
       if (entry.fiber.type !== Component) return [];
-      return hooks(entry.fiber).flatMap((hook) => {
+      return hooks(entry.fiber, language).flatMap((hook) => {
         const runtime = field(hook, "current");
         if (!(runtime instanceof Runtime)) return [];
         const terminal = terminalSchema.safeParse(field(runtime, "terminal"));
         return terminal.success && root.contains(terminal.data.element) ? [{ ...entry, runtime, terminal: terminal.data }] : [];
       });
     });
-    if (matches.length !== 1) throw new Error("终端选择接口不明确。");
+    if (matches.length !== 1) throw new Error(t().terminalSelectionUnclear);
     const match = matches[0], parents = match.ancestors.filter((fiber) => fiber.type === TerminalPane);
-    if (parents.length !== 1) throw new Error("无法验证终端所属会话。");
+    if (parents.length !== 1) throw new Error(t().terminalSessionUnverified);
     const parent = z.object({ serverId: nonempty, cwd: nonempty, terminalId: nonempty }).parse(parents[0].memoizedProps), streamKey = nonempty.parse(field(match.fiber.memoizedProps, "streamKey"));
-    if (streamKey !== `${parent.serverId}:${parent.cwd}:${parent.terminalId}`) throw new Error("终端会话已变化。");
+    if (streamKey !== `${parent.serverId}:${parent.cwd}:${parent.terminalId}`) throw new Error(t().terminalSessionChanged);
     const captured = contextFor(root, match);
-    if (captured.context.target.kind !== "terminal" || field(captured.context.target, "terminalId") !== parent.terminalId) throw new Error("终端标签已切换。");
+    if (captured.context.target.kind !== "terminal" || field(captured.context.target, "terminalId") !== parent.terminalId) throw new Error(t().terminalTabSwitched);
     const previousStream = terminalStreams.get(match.runtime);
-    if (previousStream && previousStream !== streamKey) throw new Error("终端正在切换，请重新选择输出。");
+    if (previousStream && previousStream !== streamKey) throw new Error(t().terminalSwitching);
     terminalStreams.set(match.runtime, streamKey);
-    if (captured.workspace.serverId !== parent.serverId || captured.workspace.root !== parent.cwd) throw new Error("终端不属于当前工作区。");
+    if (captured.workspace.serverId !== parent.serverId || captured.workspace.root !== parent.cwd) throw new Error(t().terminalNotInWorkspace);
     trackTerminal(match.terminal);
     return { ...match, ...parent, streamKey, captured };
   };
@@ -352,13 +355,13 @@ export function createSourceHost(requireModule: (id: number) => unknown, source:
     const text = terminal.getSelection(), position = terminalPositionSchema.parse(terminal.getSelectionPosition()); if (!text.length) return null;
     const buffer = terminal.buffer.active, bufferType = z.enum(["normal", "alternate"]).parse(buffer.type), cols = terminal.cols, rows = terminal.rows;
     const evidence = () => JSON.stringify({ type: terminal.buffer.active.type, length: terminal.buffer.active.length, baseY: terminal.buffer.active.baseY, cols: terminal.cols, rows: terminal.rows, lines: Array.from({ length: position.end.y - position.start.y + 1 }, (_, i) => terminal.buffer.active.getLine(position.start.y + i)?.translateToString(false) ?? null) });
-    if (position.end.y < position.start.y || position.end.y - position.start.y > 20_000) throw new Error("终端选区过长，无法验证定位。");
+    if (position.end.y < position.start.y || position.end.y - position.start.y > 20_000) throw new Error(t().terminalSelectionTooLong);
     const contextValid = sourceGuard(root, captured);
     const content = evidence(), writeEpoch = trackTerminal(terminal).epoch, valid = () => {
       if (!visible(root)) return false;
       try { const next = terminalBinding(root); return visible(root) && next.runtime === binding.runtime && next.terminal === terminal && next.streamKey === binding.streamKey && sameTarget(next.captured, captured); } catch { return false; }
     };
-    const snapshot = fingerprint(content).then((version): ExternalSnapshot => ({ text, title: `终端 ${binding.terminalId} · 缓冲区 ${position.start.y + 1}-${position.end.y + 1}`, origin: { kind: "terminal", workspace: captured.workspace, tabId: captured.context.tabId, terminalId: binding.terminalId, cwd: binding.cwd, streamKey: binding.streamKey, buffer: bufferType, start: position.start, end: position.end, cols, rows, version } }));
+    const snapshot = fingerprint(content, language).then((version): ExternalSnapshot => ({ text, title: t().terminalSourceTitle(binding.terminalId, `${position.start.y + 1}-${position.end.y + 1}`), origin: { kind: "terminal", workspace: captured.workspace, tabId: captured.context.tabId, terminalId: binding.terminalId, cwd: binding.cwd, streamKey: binding.streamKey, buffer: bufferType, start: position.start, end: position.end, cols, rows, version } }));
     const terminalGeometry = (): SourceGeometry => {
       if (!contextValid() || field(binding.runtime, "terminal") !== terminal || !root.contains(terminal.element) || evidence() !== content || trackTerminal(terminal).epoch !== writeEpoch) return { kind: "unavailable" };
       const screen = root.querySelector(".xterm-screen"); if (!(screen instanceof HTMLElement)) return { kind: "unavailable" };
@@ -371,9 +374,9 @@ export function createSourceHost(requireModule: (id: number) => unknown, source:
       return rects.length ? { kind: "visible", rects, bounds: { left: Math.max(0, box.left), right: Math.min(innerWidth, box.right), top: Math.max(0, box.top), bottom: Math.min(innerHeight, box.bottom) } } : { kind: "offscreen" };
     };
     return makeOffer(root, captured, [binding.runtime, terminal, buffer, writeEpoch, content, text, position.start.x, position.start.y, position.end.x, position.end.y], snapshot, valid, terminalGeometry, async () => {
-      if (!valid() || evidence() !== content || trackTerminal(terminal).epoch !== writeEpoch) return { kind: "unavailable", reason: "终端缓冲区或会话已变化，原文位置不可用。" };
+      if (!valid() || evidence() !== content || trackTerminal(terminal).epoch !== writeEpoch) return { kind: "unavailable", reason: t().terminalBufferChanged };
       terminal.scrollToLine(position.start.y); terminal.select(position.start.x, position.start.y, (position.end.y - position.start.y) * cols + position.end.x - position.start.x);
-      if (terminal.getSelection() !== text) return { kind: "unavailable", reason: "终端原文校验失败。" };
+      if (terminal.getSelection() !== text) return { kind: "unavailable", reason: t().terminalCheckFailed };
       return { kind: "highlighted" };
     });
   };
@@ -383,10 +386,10 @@ export function createSourceHost(requireModule: (id: number) => unknown, source:
   const diffModelSchema = z.custom<DiffModel>((value) => z.object({ files: z.array(z.object({ path: nonempty, file: z.object({ path: nonempty, oldPath: z.string().optional(), isNew: z.boolean(), isDeleted: z.boolean(), hunks: z.array(z.unknown()) }).passthrough() }).passthrough()), rows: z.array(z.object({ kind: z.string() }).passthrough()), layout: z.enum(["split", "unified"]) }).safeParse(value).success);
   const diffBinding = (root: HTMLElement) => {
     const ids = capability("diff"), Component = callable.parse(field(requireModule(ids.diff), "DiffSurface")), canvas = root.querySelector('[data-testid="git-diff-canvas"]'), scroll = root.querySelector('[data-testid="git-diff-scroll"]');
-    if (!(canvas instanceof HTMLCanvasElement) || !(scroll instanceof HTMLElement)) throw new Error("Diff 画布接口已变化。");
-    const matches = currentFibers(root).flatMap((entry) => {
+    if (!(canvas instanceof HTMLCanvasElement) || !(scroll instanceof HTMLElement)) throw new Error(t().diffCanvasChanged);
+    const matches = currentFibers(root, language).flatMap((entry) => {
       if (entry.fiber.type !== Component) return [];
-      const values = hooks(entry.fiber), result: Array<{ entry: typeof entry; model: DiffModel; selection: unknown; modelRef: unknown; selectionRef: unknown; offsets: Map<unknown, unknown>; scroll: HTMLElement }> = [];
+      const values = hooks(entry.fiber, language), result: Array<{ entry: typeof entry; model: DiffModel; selection: unknown; modelRef: unknown; selectionRef: unknown; offsets: Map<unknown, unknown>; scroll: HTMLElement }> = [];
       for (let i = 0; i + 10 < values.length; i++) {
         const refs = values.slice(i, i + 11); if (!refs.every((value) => typeof value === "object" && value !== null && Object.hasOwn(value, "current"))) continue;
         const v = refs.map((value) => field(value, "current"));
@@ -397,7 +400,7 @@ export function createSourceHost(requireModule: (id: number) => unknown, source:
       }
       return result;
     });
-    if (matches.length !== 1) throw new Error("Diff 原文模型接口不明确。");
+    if (matches.length !== 1) throw new Error(t().diffModelUnclear);
     const match = matches[0], captured = contextFor(root, match.entry);
     return { ...match, captured, helpers: functions(requireModule(ids.diffSelection), ["orderedSelection", "selectedSourceText", "selectionRectangles"]) };
   };
@@ -406,43 +409,43 @@ export function createSourceHost(requireModule: (id: number) => unknown, source:
     if (!binding.selection) return null;
     const selection = selectionSchema.parse(binding.selection), ordered = z.object({ start: positionSchema, end: positionSchema }).parse(helpers.orderedSelection(selection)), { start, end } = ordered;
     const text = z.string().parse(helpers.selectedSourceText(model, selection)); if (!text.length) return null;
-    if (start.fileIndex !== end.fileIndex) throw new Error("暂不支持跨文件 Diff 选区。");
+    if (start.fileIndex !== end.fileIndex) throw new Error(t().diffAcrossFiles);
     const cells: Array<{ cell: DiffCell; path: string; fileIndex: number; from: number; to: number }> = [], oneColumn = model.layout === "split" && start.cellIndex === end.cellIndex;
     const compare = (a: { rowIndex: number; cellIndex: number }, b: { rowIndex: number; cellIndex: number }) => a.rowIndex - b.rowIndex || a.cellIndex - b.cellIndex;
     for (const endpoint of [start, end]) {
       const row = model.rows[endpoint.rowIndex], cell = row?.cells?.[endpoint.cellIndex];
-      if (!row || row.fileIndex !== endpoint.fileIndex || !cell || endpoint.sourceOffset > cell.content.length || cell.sourceIdentity?.side !== endpoint.side) throw new Error("Diff 选区已变化。");
+      if (!row || row.fileIndex !== endpoint.fileIndex || !cell || endpoint.sourceOffset > cell.content.length || cell.sourceIdentity?.side !== endpoint.side) throw new Error(t().diffSelectionChanged);
     }
     for (let rowIndex = start.rowIndex; rowIndex <= end.rowIndex; rowIndex++) {
-      const row = model.rows[rowIndex]; if (!row || row.kind !== "line" || !Array.isArray(row.cells)) throw new Error("请选择连续的 Diff 代码行。");
+      const row = model.rows[rowIndex]; if (!row || row.kind !== "line" || !Array.isArray(row.cells)) throw new Error(t().diffPickLines);
       row.cells.forEach((cell, cellIndex) => {
         if (!cell || oneColumn && cellIndex !== start.cellIndex || compare({ rowIndex, cellIndex }, start) < 0 || compare({ rowIndex, cellIndex }, end) > 0) return;
         const from = rowIndex === start.rowIndex && cellIndex === start.cellIndex ? start.sourceOffset : 0, to = rowIndex === end.rowIndex && cellIndex === end.cellIndex ? end.sourceOffset : cell.content.length;
         cells.push({ cell, path: row.path, fileIndex: row.fileIndex, from, to });
       });
     }
-    if (!cells.length || cells.map(({ cell, from, to }) => cell.content.slice(from, to)).join("\n") !== text) throw new Error("Diff 选区文本契约已变化。");
-    if (new Set(cells.map((c) => c.fileIndex)).size !== 1 || new Set(cells.map((c) => c.path)).size !== 1) throw new Error("暂不支持跨文件 Diff 选区。");
-    if (new Set(cells.map((c) => c.cell.sourceIdentity?.side)).size !== 1) throw new Error("暂不支持同时包含 Diff 两侧的选区。");
+    if (!cells.length || cells.map(({ cell, from, to }) => cell.content.slice(from, to)).join("\n") !== text) throw new Error(t().diffTextChanged);
+    if (new Set(cells.map((c) => c.fileIndex)).size !== 1 || new Set(cells.map((c) => c.path)).size !== 1) throw new Error(t().diffAcrossFiles);
+    if (new Set(cells.map((c) => c.cell.sourceIdentity?.side)).size !== 1) throw new Error(t().diffBothSides);
     const first = cells[0], last = cells[cells.length - 1], file = model.files[first.fileIndex];
-    if (!file || file.path !== first.path) throw new Error("Diff 文件身份不明确。");
+    if (!file || file.path !== first.path) throw new Error(t().diffFileUnclear);
     const side = z.enum(["old", "new"]).parse(first.cell.sourceIdentity?.side);
     cells.forEach(({ cell, path }, i) => {
       const identity = cell.sourceIdentity, target = cell.reviewTarget;
-      if (cell.type === "header" || !identity || !target || !Number.isInteger(cell.lineNumber) || cell.lineNumber === null || cell.lineNumber < 1 || target.side !== side || identity.side !== side || target.filePath !== path || target.content !== cell.content || target.hunkIndex !== identity.hunkIndex || target.lineIndex !== identity.lineIndex || target.lineNumber !== cell.lineNumber || (side === "old" ? target.oldLineNumber : target.newLineNumber) !== cell.lineNumber) throw new Error("请选择 Diff 原文代码，区块标题无法添加。");
-      if (i && cell.lineNumber !== Number(cells[i - 1].cell.lineNumber) + 1) throw new Error("暂不支持不连续的 Diff 原文行。");
+      if (cell.type === "header" || !identity || !target || !Number.isInteger(cell.lineNumber) || cell.lineNumber === null || cell.lineNumber < 1 || target.side !== side || identity.side !== side || target.filePath !== path || target.content !== cell.content || target.hunkIndex !== identity.hunkIndex || target.lineIndex !== identity.lineIndex || target.lineNumber !== cell.lineNumber || (side === "old" ? target.oldLineNumber : target.newLineNumber) !== cell.lineNumber) throw new Error(t().diffHunkHeader);
+      if (i && cell.lineNumber !== Number(cells[i - 1].cell.lineNumber) + 1) throw new Error(t().diffGaps);
     });
     const props = binding.entry.fiber.memoizedProps, mode = z.object({ kind: z.enum(["commit", "working"]) }).passthrough().parse(field(props, "mode"));
     let revision: Extract<ExternalOrigin, { kind: "diff" }>["revision"];
     if (mode.kind === "commit") {
-      if (captured.context.target.kind !== "commit_diff") throw new Error("无法验证 Diff 提交来源。");
+      if (captured.context.target.kind !== "commit_diff") throw new Error(t().diffCommitUnverified);
       revision = { kind: "commit", sha: nonempty.parse(field(captured.context.target, "sha")) };
     } else {
-      const changesIds = resolveModuleIds(source, { changes: ["ChangesSurface", "resolveDiffLayout", "DiffModeMenu"] }), ChangesSurface = callable.parse(field(requireModule(changesIds.changes), "ChangesSurface"));
-      const owners = binding.entry.ancestors.filter((fiber) => fiber.type === ChangesSurface); if (owners.length !== 1) throw new Error("无法验证工作区 Diff 比较来源。");
+      const changesIds = resolveModuleIds(source, { changes: ["ChangesSurface", "resolveDiffLayout", "DiffModeMenu"] }, language), ChangesSurface = callable.parse(field(requireModule(changesIds.changes), "ChangesSurface"));
+      const owners = binding.entry.ancestors.filter((fiber) => fiber.type === ChangesSurface); if (owners.length !== 1) throw new Error(t().diffCompareUnverified);
       const owner = owners[0], ownerProps = z.object({ serverId: nonempty, workspaceId: nonempty, cwd: nonempty }).parse(owner.memoizedProps);
-      if (ownerProps.serverId !== captured.workspace.serverId || ownerProps.cwd !== captured.workspace.root || scope({ ...captured.context, workspaceId: ownerProps.workspaceId }).workspaceId !== captured.workspace.workspaceId) throw new Error("工作区 Diff 来源已变化。");
-      const data = field(field(owner.updateQueue, "memoCache"), "data"); if (!Array.isArray(data)) throw new Error("工作区 Diff 比较接口已变化。");
+      if (ownerProps.serverId !== captured.workspace.serverId || ownerProps.cwd !== captured.workspace.root || scope({ ...captured.context, workspaceId: ownerProps.workspaceId }).workspaceId !== captured.workspace.workspaceId) throw new Error(t().diffSourceChanged);
+      const data = field(field(owner.updateQueue, "memoCache"), "data"); if (!Array.isArray(data)) throw new Error(t().diffCompareApiChanged);
       const matches = data.flatMap((row) => {
         if (!Array.isArray(row)) return [];
         return row.flatMap((value) => {
@@ -450,15 +453,15 @@ export function createSourceHost(requireModule: (id: number) => unknown, source:
           return row.flatMap((options) => field(options, "serverId") === captured.workspace.serverId && field(options, "cwd") === captured.workspace.root && field(options, "mode") === field(value, "diffMode") && field(options, "baseRef") === field(value, "baseRef") && typeof field(options, "ignoreWhitespace") === "boolean" && options && typeof options === "object" && Object.hasOwn(options, "enabled") ? [{ value, options }] : []);
         });
       });
-      if (matches.length !== 1) throw new Error("工作区 Diff 比较来源不明确。");
+      if (matches.length !== 1) throw new Error(t().diffCompareUnclear);
       const comparison = z.enum(["base", "uncommitted"]).parse(field(matches[0].value, "diffMode"));
       revision = { kind: "working", mode: comparison, baseRef: comparison === "base" ? nonempty.parse(field(matches[0].value, "baseRef")).trim() : null, ignoreWhitespace: z.boolean().parse(field(matches[0].options, "ignoreWhitespace")), revisionResolution: "unresolved" };
     }
-    if (field(binding.modelRef, "current") !== model || field(binding.selectionRef, "current") !== binding.selection) throw new Error("Diff 选区已变化。");
+    if (field(binding.modelRef, "current") !== model || field(binding.selectionRef, "current") !== binding.selection) throw new Error(t().diffSelectionChanged);
     const lineStart = z.number().int().positive().parse(first.cell.lineNumber), lineEnd = last.to === 0 && cells.length > 1 ? Number(cells[cells.length - 2].cell.lineNumber) : z.number().int().positive().parse(last.cell.lineNumber);
     const canonicalHunks = z.array(z.object({ oldStart: z.number(), oldCount: z.number(), newStart: z.number(), newCount: z.number(), lines: z.array(z.object({ type: z.string(), content: z.string() })) })).parse(file.file.hunks);
     const sourceFile = fileIdentity(side === "old" ? file.file.oldPath ?? file.path : file.path, captured.workspace), canonical = JSON.stringify({ path: file.path, oldPath: file.file.oldPath ?? null, isNew: file.file.isNew, isDeleted: file.file.isDeleted, hunks: canonicalHunks });
-    const snapshot = fingerprint(canonical).then((version): ExternalSnapshot => ({ text, title: `${file.path}:${lineStart}-${lineEnd} · ${side === "old" ? "旧" : "新"}侧`, origin: { kind: "diff", workspace: captured.workspace, tabId: captured.context.tabId, segment: { file: sourceFile, displayPath: file.path, oldPath: file.file.oldPath ?? null, side, lineStart, lineEnd, startColumn: first.from, endColumn: last.to, cells: cells.map(({ cell, from, to }) => ({ lineNumber: Number(cell.lineNumber), hunkIndex: Number(cell.sourceIdentity?.hunkIndex), lineIndex: Number(cell.sourceIdentity?.lineIndex), type: cell.type, from, to })) }, revision, version } }));
+    const snapshot = fingerprint(canonical, language).then((version): ExternalSnapshot => ({ text, title: `${file.path}:${lineStart}-${lineEnd} · ${t().diffSide(side)}`, origin: { kind: "diff", workspace: captured.workspace, tabId: captured.context.tabId, segment: { file: sourceFile, displayPath: file.path, oldPath: file.file.oldPath ?? null, side, lineStart, lineEnd, startColumn: first.from, endColumn: last.to, cells: cells.map(({ cell, from, to }) => ({ lineNumber: Number(cell.lineNumber), hunkIndex: Number(cell.sourceIdentity?.hunkIndex), lineIndex: Number(cell.sourceIdentity?.lineIndex), type: cell.type, from, to })) }, revision, version } }));
     const contextValid = sourceGuard(root, captured);
     const valid = () => { try { const current = diffBinding(root); return visible(root) && current.model === model && sameTarget(current.captured, captured); } catch { return false; } };
     return makeOffer(root, captured, [model, canonical, JSON.stringify(ordered), JSON.stringify(revision)], snapshot, valid, () => {
@@ -475,8 +478,8 @@ export function createSourceHost(requireModule: (id: number) => unknown, source:
 
   const reveal: SourceHost["reveal"] = async (snapshot) => {
     const { origin } = snapshot;
-    if (!scopeValid(origin.workspace)) return { kind: "unavailable", reason: "请返回原工作区后定位原文。" };
-    if (origin.kind === "terminal") return { kind: "unavailable", reason: "终端会话或缓冲区已变化，原文位置不可用。" };
+    if (!scopeValid(origin.workspace)) return { kind: "unavailable", reason: t().returnToWorkspace };
+    if (origin.kind === "terminal") return { kind: "unavailable", reason: t().terminalSessionOrBufferChanged };
     if (origin.kind === "file") {
       for (const root of document.querySelectorAll<HTMLElement>('[data-testid="workspace-file-pane"]')) {
         try {
@@ -485,7 +488,7 @@ export function createSourceHost(requireModule: (id: number) => unknown, source:
           const cm = root.querySelector(".cm-content"); if (!cm) continue;
           const id = capability("editor"), EditorView = field(requireModule(id.editor), "EditorView"), find = callable.parse(field(EditorView, "findFromDOM")), view = find.call(EditorView, cm), doc = field(field(view, "state"), "doc");
           const content = z.string().parse(callable.parse(field(doc, "toString")).call(doc));
-          if ((await fingerprint(content)).digest !== origin.version.digest || !scopeValid(origin.workspace) || field(field(view, "state"), "doc") !== doc || !visible(root) || !root.contains(z.instanceof(HTMLElement).parse(field(view, "dom")))) continue;
+          if ((await fingerprint(content, language)).digest !== origin.version.digest || !scopeValid(origin.workspace) || field(field(view, "state"), "doc") !== doc || !visible(root) || !root.contains(z.instanceof(HTMLElement).parse(field(view, "dom")))) continue;
           if (field(contextFor(root).context.target, "path") !== origin.file.requestedPath) continue;
           if (z.string().parse(callable.parse(field(doc, "sliceString")).call(doc, origin.from, origin.to)) !== snapshot.text) continue;
           callable.parse(field(view, "dispatch")).call(view, { selection: { anchor: origin.from, head: origin.to }, scrollIntoView: true });
@@ -493,12 +496,12 @@ export function createSourceHost(requireModule: (id: number) => unknown, source:
         } catch { continue; }
       }
     }
-    if (!scopeValid(origin.workspace)) return { kind: "unavailable", reason: "工作区已切换。" };
+    if (!scopeValid(origin.workspace)) return { kind: "unavailable", reason: t().workspaceSwitched };
     const target = origin.kind === "diff" ? origin.revision.kind === "commit" ? { kind: "commit_diff", sha: origin.revision.sha } : { kind: "working_diff", focusPath: origin.segment.displayPath, focusRequestId: Date.now() }
       : pathFunctions().createWorkspaceFileTabTarget(pathFunctions().normalizeWorkspaceFileLocation({ path: origin.file.requestedPath }));
-    if (!target) return { kind: "unavailable", reason: "原文路径无法验证。" };
+    if (!target) return { kind: "unavailable", reason: t().sourcePathUnverified };
     const opened = functions(requireModule(capability("opener").opener), ["openWorkspaceTargetAtLocation"]).openWorkspaceTargetAtLocation({ workspaceKey: origin.workspace.workspaceKey, target, location: "main" });
-    return typeof opened === "string" && opened.length ? { kind: "opened", reason: origin.kind === "diff" ? "已打开 Diff，原文行位置不可用。" : "已打开文件，原文位置未验证。" } : { kind: "unavailable", reason: "无法打开原文标签。" };
+    return typeof opened === "string" && opened.length ? { kind: "opened", reason: origin.kind === "diff" ? t().openedDiff : t().openedFile } : { kind: "unavailable", reason: t().sourceTabOpenFailed };
   };
   const rootFor = (target?: EventTarget | null): HTMLElement | null => {
     const element = target instanceof HTMLElement ? target : target instanceof Node ? target.parentElement : null;
@@ -513,7 +516,7 @@ export function createSourceHost(requireModule: (id: number) => unknown, source:
       if (root.matches('[data-testid="terminal-surface"]')) return captureTerminal(root);
       if (root.matches('[data-testid="git-diff-canvas-root"]')) return captureDiff(root);
       return captureFile(root);
-    } catch (error) { return { kind: "unavailable", root, reason: reason(error) }; }
+    } catch (error) { return { kind: "unavailable", root, reason: reason(error, language) }; }
   };
   const cleanups = new Set<() => void>();
   return {
@@ -569,27 +572,27 @@ export function createSourceHost(requireModule: (id: number) => unknown, source:
   };
 }
 
-export function resolveSemanticModuleIds(source: string, signatures: Record<string, readonly string[]>): Record<string, number> {
+export function resolveSemanticModuleIds(source: string, signatures: Record<string, readonly string[]>, language?: LocaleSource): Record<string, number> {
   const chunks = source.split(/(?=__d\(function\()/), ids: Record<string, number> = {};
   for (const [name, tokens] of Object.entries(signatures)) {
     const matching = chunks.flatMap((chunk) => {
       if (!chunk.startsWith("__d(function(") || !tokens.every((token) => chunk.includes(token))) return [];
       const match = chunk.match(/\},(\d+),\[[\d,]*\]\);/); return match ? [Number(match[1])] : [];
     });
-    if (matching.length !== 1) throw new Error(`当前 Paseo 的 ${name} 选择接口无法验证。`);
+    if (matching.length !== 1) throw new LocalizedError((m) => m.selectionApiUnverified(name), language);
     ids[name] = matching[0];
   }
   return ids;
 }
 
-export async function discoverSourceHost(signal: AbortSignal): Promise<SourceHost> {
+export async function discoverSourceHost(signal: AbortSignal, language?: LocaleSource): Promise<SourceHost> {
   const runtime = z.object({ __r: callable }).parse(globalThis), base = new URL(window.location.href);
   const urls = Array.from(document.scripts).flatMap((script) => { if (!script.src) return []; const url = new URL(script.src, base); return url.origin === base.origin && url.protocol === base.protocol ? [url.href] : []; });
   for (const url of urls) {
     const response = await fetch(url, { signal }); if (!response.ok) continue;
-    const source = await response.text(); if (signal.aborted) throw new Error("注释插件已关闭。");
+    const source = await response.text(); if (signal.aborted) throw new LocalizedError((m) => m.pluginClosed, language);
     if (!source.includes("useWorkspaceLayoutStore")) continue;
-    return createSourceHost((id) => runtime.__r(id), source);
+    return createSourceHost((id) => runtime.__r(id), source, language);
   }
-  throw new Error("未找到工作区原文选择接口。");
+  throw new LocalizedError((m) => m.selectionApiNotFound, language);
 }

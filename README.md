@@ -39,7 +39,7 @@ Open **Settings > Plugins > Codex Style Annotations > Annotation types** to enab
 
 Settings load at startup and are checked again before each addition. Read failures and save conflicts stay visible without resetting saved values.
 
-Settings, the selection toolbar, and the side-question editor follow Paseo's English or Chinese language setting. Other languages use English. Some annotation popovers still display Chinese labels; this guide describes those actions in English.
+Settings, the selection toolbar, annotation popovers, and messages follow Paseo's English or Chinese language setting. Other languages use English. Annotations saved in Chinese before this change still open and edit normally.
 
 ## Supported sources
 

@@ -1,3 +1,5 @@
+import { text, type LocaleSource } from "./messages";
+
 /**
  * Text shaping shared by the selection bar and the side chat. Pure functions:
  * no DOM, no React Native, so both runtimes can import them.
@@ -42,13 +44,13 @@ export function encodeAnnotation(annotation: Annotation): { text: string; subtit
     : { text: annotation.quote };
 }
 
-export function decodeAnnotation(item: { text: string; subtitle?: string }):
+export function decodeAnnotation(item: { text: string; subtitle?: string }, language?: LocaleSource):
   | { kind: "editable"; annotation: Annotation }
   | { kind: "invalid"; reason: string } {
   if (item.subtitle === undefined) return { kind: "editable", annotation: { quote: item.text, comment: "" } };
   const suffix = `\n\n${item.subtitle}`;
   if (!item.subtitle.length || !item.text.endsWith(suffix)) {
-    return { kind: "invalid", reason: "此引用的评论格式无法安全编辑，原内容已保留。" };
+    return { kind: "invalid", reason: text(language).commentFormatUnsafe };
   }
   return { kind: "editable", annotation: { quote: item.text.slice(0, -suffix.length), comment: item.subtitle } };
 }

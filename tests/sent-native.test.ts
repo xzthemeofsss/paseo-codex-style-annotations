@@ -31,9 +31,9 @@ test("installed Paseo bundle resolves and validates original native UserMessage/
   const message = nativeExports(ids.message), attachment = nativeExports(ids.attachment);
   const native = inspectSentNative(message, attachment);
   assert.equal(native.user, message.UserMessage); assert.equal(native.frame, attachment.AttachmentFrame); assert.equal(native.label, attachment.AttachmentLabel);
-  assert.throws(() => resolveModuleIds(bundle + bundle, SENT_MODULES), /不明确/);
-  assert.throws(() => inspectSentNative({ ...message, UserMessage: memo(() => null) }, attachment), /已变化/);
-  assert.throws(() => inspectSentNative(message, { ...attachment, AttachmentLabel: () => null }), /已变化/);
+  assert.throws(() => resolveModuleIds(bundle + bundle, SENT_MODULES), /unclear/);
+  assert.throws(() => inspectSentNative({ ...message, UserMessage: memo(() => null) }, attachment), /changed/);
+  assert.throws(() => inspectSentNative(message, { ...attachment, AttachmentLabel: () => null }), /changed/);
   assert.match(bundlePath, /index-.*\.js$/);
 });
 
@@ -52,7 +52,7 @@ test("running same-origin scripts discover the original native references and ho
     assert.equal(native.user, message.UserMessage); assert.equal(native.frame, attachment.AttachmentFrame);
     assert.deepEqual(requests, ["https://paseo.test/current-app.js"]);
     const abort = new AbortController(); abort.abort();
-    await assert.rejects(discoverSentNative(abort.signal), /已关闭/);
+    await assert.rejects(discoverSentNative(abort.signal), /closed/);
   } finally {
     Object.assign(globalThis, { window: prior.window, document: prior.document, fetch: prior.fetch, __r: prior.require }); dom.window.close();
   }

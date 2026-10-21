@@ -1,5 +1,6 @@
 import type { PluginClientContext } from "@getpaseo/plugin/client";
 import { buildSideChatSystemPrompt, sideChatTitle, type ChatTurn } from "./format";
+import { LocalizedError, type LocaleSource } from "./messages";
 
 type PaseoApi = PluginClientContext["paseo"];
 type AgentHandle = ReturnType<PaseoApi["agents"]["ref"]>;
@@ -16,14 +17,14 @@ export interface SideChat {
  */
 export async function startSideChat(
   paseo: PaseoApi,
-  input: { agentId: string; quote: string; question: string },
+  input: { agentId: string; quote: string; question: string; language?: LocaleSource },
 ): Promise<SideChat> {
   const parent = paseo.agents.ref(input.agentId);
   const [refetched, turns] = await Promise.all([parent.refresh(), readTurns(parent, 120)]);
   const snapshot = refetched?.agent ?? parent.current();
-  if (!snapshot) throw new Error("The main chat is not available.");
+  if (!snapshot) throw new LocalizedError((m) => m.mainChatUnavailable, input.language);
   const workspaceId = snapshot.workspaceId;
-  if (!workspaceId) throw new Error("The main chat has no workspace.");
+  if (!workspaceId) throw new LocalizedError((m) => m.mainChatNoWorkspace, input.language);
 
   const model = snapshot.model ?? snapshot.runtimeInfo?.model ?? null;
   const child = await paseo.workspaces.ref(workspaceId).agents.create({

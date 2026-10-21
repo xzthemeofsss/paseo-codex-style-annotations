@@ -72,7 +72,7 @@ for (const provider of ["quote", "quote-notes"]) {
     try {
       await tick();
       const { element, shadow, button, panel } = controls(f);
-      assert.equal(button.textContent, "1 条注释");
+      assert.equal(button.textContent, "1 annotation");
       assert.equal(element.nextSibling, native); assert.equal(native.nextSibling, footer);
       assert.equal(f.doc.querySelector('[data-paseo-sent-quotes="popup"]')!.parentElement, f.doc.body);
       assert.equal(native.style.display, ""); assert.equal(frames[0].style.display, "none"); assert.equal(frames[1].style.display, "");
@@ -97,7 +97,7 @@ test("quote-only rows hide empty native shell reversibly, and numbered disclosur
   const dispose = f.install();
   try {
     await tick(); const { element, shadow, button, panel } = controls(f);
-    assert.equal(native.style.display, "none"); assert.equal(button.textContent, "2 条注释");
+    assert.equal(native.style.display, "none"); assert.equal(button.textContent, "2 annotations");
     button.dispatchEvent(new f.dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, composed: true, cancelable: true }));
     assert.equal(panel.hidden, false); assert.equal(shadow.activeElement, panel); assert.equal(panel.tabIndex, -1); assert.deepEqual([...shadow.querySelectorAll("pre")].map((pre) => pre.textContent), [quote().text, second.text]);
     assert.match(shadow.querySelectorAll(".entry-head")[1].textContent!, /^2\. /);
@@ -199,7 +199,7 @@ for (const failure of ["unavailable", "denied"] as const) {
     try {
       await tick(); const { shadow, button } = controls(f); button.click();
       const copy = shadow.querySelector<HTMLButtonElement>(".copy")!; copy.click(); await tick();
-      assert.equal(copy.textContent, failure === "unavailable" ? "请选择全文复制" : "复制失败");
+      assert.equal(copy.textContent, failure === "unavailable" ? "Select the text to copy" : "Copy failed");
       assert.equal(shadow.querySelector("pre")!.textContent, quote().text);
     } finally { dispose(); await f.close(); }
   });
@@ -221,7 +221,7 @@ test("unsupported native discovery reports one safe warning while preserving nat
   console.warn = (...args: unknown[]) => { warnings.push(args); };
   const dispose = f.install(async () => { throw new Error("private runtime detail"); });
   try {
-    await tick(); assert.equal(f.capsule(), null); assert.deepEqual(warnings, [["引用插件无法确认原生消息组件，已保留原生附件。"]]);
+    await tick(); assert.equal(f.capsule(), null); assert.deepEqual(warnings, [["The quote plugin could not confirm the native message component. Native attachments are kept."]]);
     assert.equal(f.native().querySelector<HTMLElement>("[data-frame]")!.style.display, "");
   } finally { dispose(); console.warn = warn; await f.close(); }
 });
@@ -250,3 +250,18 @@ for (const kind of ["mixed", "quote-only"] as const) {
     } finally { dispose(); await f.close(); }
   });
 }
+
+test("the sent chip, header and copy button follow a language change", async () => {
+  const f = fixture(); await f.render();
+  let locale: "en" | "zh" = "zh"; const listeners = new Set<() => void>();
+  const language = { getSnapshot: () => locale, subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; } };
+  const dispose = installSentQuotes({ discover: async () => f.capability, language });
+  try {
+    await tick(); const { button, shadow, panel } = controls(f);
+    assert.equal(button.textContent, "1 条注释"); assert.equal(shadow.querySelector("header")!.textContent, "注释");
+    assert.equal(shadow.querySelector(".copy")!.textContent, "复制全文"); assert.equal(panel.getAttribute("aria-label"), "已发送的注释");
+    locale = "en"; for (const listener of listeners) listener();
+    assert.equal(button.textContent, "1 annotation"); assert.equal(shadow.querySelector("header")!.textContent, "Annotations");
+    assert.equal(shadow.querySelector(".copy")!.textContent, "Copy full text"); assert.equal(panel.getAttribute("aria-label"), "Sent annotations");
+  } finally { dispose(); assert.equal(listeners.size, 0); await f.close(); }
+});

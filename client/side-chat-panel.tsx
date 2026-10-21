@@ -1,6 +1,6 @@
 import { type PluginAgentPanelProps, useAgent, usePaseo } from "@getpaseo/plugin/client";
 import { ScrollView, TextInput } from "@getpaseo/plugin/client/react-native";
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentRef } from "react";
 import {
   Platform,
   Pressable,
@@ -11,6 +11,8 @@ import {
 } from "react-native";
 import { readTurns } from "./actions";
 import type { ChatTurn } from "./format";
+import { text as messagesFor } from "./messages";
+import { englishSettingsLocale, type SettingsLanguage } from "./settings-language";
 
 const MONO = Platform.select({
   web: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
@@ -58,7 +60,11 @@ function message(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
-export function SideChatPanel({ theme, layout, agentId, navigation }: PluginAgentPanelProps) {
+const noLanguage: SettingsLanguage = { getSnapshot: englishSettingsLocale, subscribe: () => () => {}, dispose() {} };
+
+export function SideChatPanel({ theme, layout, agentId, navigation, language = noLanguage }: PluginAgentPanelProps & { language?: SettingsLanguage }) {
+  const locale = useSyncExternalStore(language.subscribe, language.getSnapshot, englishSettingsLocale);
+  const t = messagesFor({ getSnapshot: () => locale });
   const paseo = usePaseo();
   const agent = useAgent(agentId, (snapshot) => ({
     status: snapshot.status,
@@ -224,17 +230,17 @@ export function SideChatPanel({ theme, layout, agentId, navigation }: PluginAgen
     <View style={styles.screen}>
       <View style={styles.header}>
         <Text style={styles.title} numberOfLines={1}>
-          {agent?.title ?? "Side chat"}
+          {agent?.title ?? t.sideChat}
         </Text>
-        {running ? <Text style={styles.status}>Thinking…</Text> : null}
+        {running ? <Text style={styles.status}>{t.thinking}</Text> : null}
         {navigation ? (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Open the side chat as a tab"
+            accessibilityLabel={t.openSideChatTab}
             onPress={() => navigation.openAgent({ agentId })}
             style={styles.link}
           >
-            <Text style={styles.linkText}>Open as tab</Text>
+            <Text style={styles.linkText}>{t.openAsTab}</Text>
           </Pressable>
         ) : null}
       </View>
@@ -245,7 +251,7 @@ export function SideChatPanel({ theme, layout, agentId, navigation }: PluginAgen
         contentContainerStyle={styles.listContent}
         onContentSizeChange={() => scroll.current?.scrollToEnd({ animated: false })}
       >
-        {turns === null ? <Text style={styles.muted}>Loading…</Text> : null}
+        {turns === null ? <Text style={styles.muted}>{t.loading}</Text> : null}
         {turns?.map((turn, index) => (
           <View key={index} style={turn.role === "user" ? styles.userTurn : styles.assistantTurn}>
             {renderBlocks(turn.text)}
@@ -260,7 +266,7 @@ export function SideChatPanel({ theme, layout, agentId, navigation }: PluginAgen
           value={draft}
           onChangeText={setDraft}
           onKeyPress={onKeyPress}
-          placeholder="Ask a follow-up…"
+          placeholder={t.askFollowUp}
           placeholderTextColor={theme.colors.foregroundMuted}
           multiline
           editable={!sending}
@@ -268,13 +274,13 @@ export function SideChatPanel({ theme, layout, agentId, navigation }: PluginAgen
         />
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Send to the side chat"
+          accessibilityLabel={t.sendToSideChat}
           accessibilityState={{ disabled: !canSend }}
           disabled={!canSend}
           onPress={() => void send()}
           style={[styles.send, !canSend && { opacity: 0.45 }]}
         >
-          <Text style={styles.sendText}>Send</Text>
+          <Text style={styles.sendText}>{t.send}</Text>
         </Pressable>
       </View>
     </View>

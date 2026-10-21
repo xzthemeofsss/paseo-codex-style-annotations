@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { text, type LocaleSource } from "./messages";
 import { resolveModuleIds } from "./host-draft-bridge";
 
 export const SENT_MODULES = {
@@ -11,7 +12,7 @@ const reference = z.custom<object>((value) => typeof value === "object" && value
 
 export type SentNative = Readonly<{ user: object; frame: unknown; label: unknown }>;
 
-export function inspectSentNative(message: unknown, attachment: unknown): SentNative {
+export function inspectSentNative(message: unknown, attachment: unknown, language?: LocaleSource): SentNative {
   const messageModule = z.object({ UserMessage: reference, AssistantMessage: z.unknown(),
     MessageOuterSpacingProvider: callable, STREAM_METADATA_FONT_SIZE: z.number() }).parse(message);
   const user = memo.parse(messageModule.UserMessage);
@@ -22,12 +23,12 @@ export function inspectSentNative(message: unknown, attachment: unknown): SentNa
     [pills.AttachmentLabel, ["icon", "title", "subtitle"]],
   ];
   if (!signatures.every(([component, terms]) => terms.every((term) => Function.prototype.toString.call(component).includes(term)))) {
-    throw new Error("Paseo 原生消息组件已变化，保留原生附件。");
+    throw new Error(text(language).nativeChanged);
   }
   return { user: messageModule.UserMessage, frame: pills.AttachmentFrame, label: pills.AttachmentLabel };
 }
 
-export async function discoverSentNative(signal: AbortSignal): Promise<SentNative> {
+export async function discoverSentNative(signal: AbortSignal, language?: LocaleSource): Promise<SentNative> {
   const requireModule = callable.parse(Reflect.get(globalThis, "__r"));
   const base = new URL(window.location.href);
   for (const script of document.scripts) {
@@ -37,10 +38,10 @@ export async function discoverSentNative(signal: AbortSignal): Promise<SentNativ
     const response = await fetch(url.href, { signal });
     if (!response.ok) continue;
     const source = await response.text();
-    if (signal.aborted) throw new Error("引用插件已关闭。");
+    if (signal.aborted) throw new Error(text(language).quotePluginClosed);
     if (!source.includes("MessageOuterSpacingProvider")) continue;
-    const ids = resolveModuleIds(source, SENT_MODULES);
-    return inspectSentNative(requireModule(ids.message), requireModule(ids.attachment));
+    const ids = resolveModuleIds(source, SENT_MODULES, language);
+    return inspectSentNative(requireModule(ids.message), requireModule(ids.attachment), language);
   }
-  throw new Error("未找到 Paseo 原生消息组件，保留原生附件。");
+  throw new Error(text(language).nativeNotFound);
 }

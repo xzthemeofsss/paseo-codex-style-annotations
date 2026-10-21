@@ -1,6 +1,7 @@
 import type { PluginClientContext } from "@getpaseo/plugin/client";
 import { Platform } from "react-native";
 import { startSideChat } from "./actions";
+import { describeError } from "./messages";
 import { formatQuote, type QuoteSource } from "./format";
 import { installSentQuotes } from "./sent-quotes";
 import { installQuoteComposer } from "./quote-composer";
@@ -429,8 +430,8 @@ function clamp(value: number, min: number, max: number): number {
 /** Installs the selection bar. Returns cleanup; a no-op off the web. */
 export function installSelectionBar(client: PluginClientContext, preferences?: AnnotationPreferences, language?: SettingsLanguage): () => void {
  if (Platform.OS !== "web" || typeof document === "undefined") return () => {};
- const quotes = installQuoteComposer({ preferences });
- const removeSentQuotes = installSentQuotes();
+ const quotes = installQuoteComposer({ preferences, language });
+ const removeSentQuotes = installSentQuotes({ language });
  const host = document.createElement("div");
  host.setAttribute("data-paseo-quote", "");
  host.setAttribute("contenteditable", "true");
@@ -609,13 +610,13 @@ export function installSelectionBar(client: PluginClientContext, preferences?: A
   field.readOnly = true;
   button("ask").disabled = true;
   button("cancel").disabled = true;
-  void startSideChat(client.paseo, { agentId, quote: formatQuote(current.snapshot.source), question: field.value }).then((side) => {
+  void startSideChat(client.paseo, { agentId, quote: formatQuote(current.snapshot.source), question: field.value, language }).then((side) => {
    if (disposed) return;
    client.openPanel("side-chat", { workspaceId: side.workspaceId, agentId: side.agentId, location: "explorer" });
    hide();
   }).catch((cause: unknown) => {
    if (disposed) return;
-   interaction = { ...current, notice: { kind: "error", message: cause instanceof Error ? cause.message : String(cause) } };
+   interaction = { ...current, notice: { kind: "error", message: describeError(cause, language) } };
    field.readOnly = false;
    button("ask").disabled = false;
    button("cancel").disabled = false;

@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
 import { createPortal } from "react-dom";
 import { JSDOM } from "jsdom";
 import { installSentQuotes } from "../client/sent-quotes";
+import { installationOwnerSchema } from "../client/host-draft-bridge";
 import type { SentNative } from "../client/sent-native";
 
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -46,7 +47,7 @@ function fixture() {
       const content = h("div", { "data-message-id": "row-stream-id", style: { display: "flex", flexDirection: "column" } }, h(Native, props));
       await act(async () => root.render(portal ? createPortal(content, doc.querySelector("aside")!) : content)); await tick();
     },
-    install(discover: (signal: AbortSignal) => Promise<SentNative> = async () => capability) { return installSentQuotes({ discover }); },
+    install(discover: (signal: AbortSignal) => Promise<SentNative> = async () => capability, hostId = defaults.serverId) { return installSentQuotes({ owner: installationOwnerSchema.parse({ hostId }), discover }); },
     native: () => doc.querySelector<HTMLElement>('[data-testid="user-message"]')!,
     capsule: () => doc.querySelector<HTMLElement>('[data-paseo-sent-quotes="capsule"]'),
     async clear() { await act(async () => root.render(null)); await tick(); },
@@ -115,6 +116,7 @@ test("quote-only rows hide empty native shell reversibly, and numbered disclosur
 
 test("props-only identity/content changes reset disclosure without replacing the native row", async () => {
   const f = fixture(); await f.render(); const native = f.native(); const dispose = f.install();
+  const disposeOther = f.install(undefined, "another-host");
   try {
     await tick(); const old = controls(f); old.button.click();
     await f.render({ ...defaults, serverId: "another-host", messageId: "new-message" });
@@ -125,7 +127,25 @@ test("props-only identity/content changes reset disclosure without replacing the
     await new Promise((resolve) => setTimeout(resolve, 1050));
     assert.notEqual(f.capsule(), current.element); assert.equal(controls(f).panel.hidden, true);
     assert.equal(controls(f).shadow.querySelector("pre")!.textContent, "changed text with same native label");
-  } finally { dispose(); await f.close(); }
+  } finally { disposeOther(); dispose(); await f.close(); }
+});
+
+test("a foreign sent installation leaves native content untouched and unloading it preserves the owner", async () => {
+  const f = fixture(); await f.render();
+  const native = f.native(), frame = native.querySelector<HTMLElement>("[data-frame]")!;
+  const foreign = f.install(undefined, "another-host");
+  let owner = () => {};
+  try {
+    await tick();
+    assert.equal(f.capsule(), null); assert.equal(frame.style.display, "");
+    owner = f.install(); await tick();
+    const capsule = f.capsule(); assert.ok(capsule);
+    foreign(); await tick();
+    assert.equal(f.capsule(), capsule); assert.equal(frame.style.display, "none");
+    owner(); assert.equal(frame.style.display, "");
+    owner = f.install(); await tick();
+    assert.ok(f.capsule()); assert.equal(f.doc.querySelectorAll('[data-paseo-sent-quotes="capsule"]').length, 1);
+  } finally { foreign(); owner(); await f.close(); }
 });
 
 for (const reason of ["metadata", "mime", "id", "order", "count", "label", "hidden", "hidden-fiber", "portal", "slot", "stale", "alternate", "ambiguous"] as const) {

@@ -1,7 +1,7 @@
 import { ANNOTATION_ICON as ICON, annotationPalette as palette } from "./annotation-visuals";
 import {
-  bindComposer, bindingStatus, discoverDraftHost, makeQuote, mutateQuotes, readQuotes, reason, writeQuoteComment,
-  bindingElement, bindingCard, isStoreBinding, type DraftBinding, type StoreBinding, type ComposerBinding, type DraftHost, type QuoteAttachment, type QuoteRef, type WriteOutcome,
+  bindComposer, bindingStatus, currentHostId, discoverDraftHost, makeQuote, mutateQuotes, readQuotes, reason, writeQuoteComment,
+  bindingElement, bindingCard, isStoreBinding, type DraftBinding, type StoreBinding, type ComposerBinding, type DraftHost, type InstallationOwner, type QuoteAttachment, type QuoteRef, type WriteOutcome,
 } from "./host-draft-bridge";
 import { captureSource, QuoteSources, type SourceGeometry } from "./quote-sources";
 import { decodeAnnotation } from "./format";
@@ -58,7 +58,7 @@ export type AddResult =
   | { kind: "uncertain"; ref: QuoteRef; reason: string }
   | Extract<WriteOutcome, { kind: "not-written" }>;
 
-export function installQuoteComposer(options: { discover?: (signal: AbortSignal) => Promise<DraftHost>; discoverSources?: (signal: AbortSignal) => Promise<SourceHost>; preferences?: AnnotationPreferences } = {}): QuoteComposer {
+export function installQuoteComposer(options: { owner: InstallationOwner; discover?: (signal: AbortSignal) => Promise<DraftHost>; discoverSources?: (input: { owner: InstallationOwner; signal: AbortSignal }) => Promise<SourceHost>; preferences?: AnnotationPreferences }): QuoteComposer {
   const lifetime = new AbortController();
   const sources = new QuoteSources();
   const marker = `quote-${crypto.randomUUID()}`;
@@ -95,7 +95,7 @@ export function installQuoteComposer(options: { discover?: (signal: AbortSignal)
   let sourceHost: SourceHost | null = null;
   let sourcePromise: Promise<SourceHost> | null = null;
   const sourceObservers = new Set<() => void>();
-  const getSourceHost = () => sourcePromise ??= (options.discoverSources ?? discoverSourceHost)(lifetime.signal).then((value) => {
+  const getSourceHost = () => sourcePromise ??= (options.discoverSources ?? discoverSourceHost)({ owner: options.owner, signal: lifetime.signal }).then((value) => {
     if (lifetime.signal.aborted) { value.dispose(); throw new Error("注释插件已关闭。"); }
     sourceHost = value; return value;
   });
@@ -523,7 +523,7 @@ export function installQuoteComposer(options: { discover?: (signal: AbortSignal)
       const agentId = tabs[0].getAttribute("data-testid")?.slice("workspace-tab-agent_".length);
       if (!agentId) continue;
       const binding = bindComposer(input, transcripts[0], agentId);
-      if (!binding) continue;
+      if (!binding || binding.hostId !== options.owner.hostId) continue;
       try { if (!host.hasAgent(binding.hostId, binding.agentId)) continue; } catch { continue; }
       const entries = quotesFor(binding), scope = scopeOf(binding);
       const retained = new Set(entries.map((entry) => entry.item.id));
@@ -636,7 +636,7 @@ export function installQuoteComposer(options: { discover?: (signal: AbortSignal)
   return {
     add(input) {
       const binding = bindComposer(input.composer, input.anchor, input.agentId);
-      if (!binding) return Promise.resolve({ kind: "not-written", reason: "无法确定当前输入框，引用未添加。", fallback: false });
+      if (!binding || binding.hostId !== options.owner.hostId) return Promise.resolve({ kind: "not-written", reason: "无法确定当前主机的输入框，引用未添加。", fallback: false });
       const attachment = makeQuote(input.formattedText, input.preview, window.location.href), source = captureSource(input.sourceRange, binding.anchor);
       return addPrepared(binding, attachment, async () => attachment, { annotationKind: Promise.resolve("chat"), openComment: input.openComment ?? false, focusComposer: input.focusComposer !== false, valid: () => true, remember: (scope) => sources.remember(scope, attachment.item.id, source) });
     },
@@ -645,7 +645,10 @@ export function installQuoteComposer(options: { discover?: (signal: AbortSignal)
       if (previous) return previous.recipient === recipient ? previous.promise : Promise.resolve({ kind: "not-written", reason: "此选区已指定接收对话，请重新选择原文。", fallback: false });
       if (!offer.recipients.includes(recipient) || !offer.validForAdd() || !recipient.validate()) return Promise.resolve({ kind: "not-written", reason: "原文或接收对话已变化。", fallback: false });
       const sourceUrl = window.location.href, attachment = makeQuote("", offer.label, sourceUrl);
-      const prepared = offer.snapshot.then((snapshot) => { const encoded = encodeExternal(snapshot, sourceUrl); return { ...attachment, item: { ...attachment.item, title: snapshot.title.slice(0, 128), url: encoded.url, text: encoded.text } }; });
+      const prepared = offer.snapshot.then((snapshot) => {
+        if (snapshot.origin.workspace.serverId !== options.owner.hostId) throw new Error("原文不属于当前插件主机，注释未添加。");
+        const encoded = encodeExternal(snapshot, sourceUrl); return { ...attachment, item: { ...attachment.item, title: snapshot.title.slice(0, 128), url: encoded.url, text: encoded.text } };
+      });
       const promise = addPrepared(recipient, attachment, () => prepared, { annotationKind: offer.snapshot.then((snapshot) => snapshot.origin.kind), openComment: true, focusComposer: false, valid: offer.validForAdd, remember: (scope) => sources.rememberExternal(scope, attachment.item.id, offer.source) });
       externalAdds.set(offer, { recipient, promise }); return promise;
     },
@@ -653,12 +656,14 @@ export function installQuoteComposer(options: { discover?: (signal: AbortSignal)
       let stop = () => {}, active = true;
       const cleanup = () => { active = false; stop(); sourceObservers.delete(cleanup); };
       sourceObservers.add(cleanup);
-      void getSourceHost().then((host) => { if (active) stop = host.observe(listener); }).catch((cause) => {
+      void getSourceHost().then((host) => { if (active) stop = host.observe((selection) => {
+        listener(currentHostId(window.location.href) === options.owner.hostId ? selection : null);
+      }); }).catch((cause) => {
         if (!active) return;
         const unavailable = (event: Event) => {
           const element = event.target instanceof Element ? event.target : null;
           const root = element?.closest<HTMLElement>('[data-testid="workspace-file-pane"],[data-testid="git-diff-canvas-root"],[data-testid="terminal-surface"]');
-          if (root && root.getClientRects().length) listener({ kind: "unavailable", root, reason: reason(cause) });
+          if (currentHostId(window.location.href) === options.owner.hostId && root && root.getClientRects().length) listener({ kind: "unavailable", root, reason: reason(cause) });
         };
         document.addEventListener("pointerup", unavailable, true); document.addEventListener("keyup", unavailable, true);
         stop = () => { document.removeEventListener("pointerup", unavailable, true); document.removeEventListener("keyup", unavailable, true); };

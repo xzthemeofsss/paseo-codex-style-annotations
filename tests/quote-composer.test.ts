@@ -2,14 +2,58 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { z } from "zod";
 import {
-  bindComposer, currentHostId, makeQuote, mutateQuotes, readQuotes, resolveModuleIds, MODULE_SIGNATURES,
-  type DraftHost, writeQuoteComment,
+  bindComposer, currentHostId, discoverInstallationOwner, installationOwnerSchema, makeQuote, mutateQuotes, readQuotes, resolveModuleIds, MODULE_SIGNATURES,
+  type DraftHost, type StoreBinding, writeQuoteComment,
 } from "../client/host-draft-bridge";
 import { installQuoteComposer } from "../client/quote-composer";
 import { formatQuote } from "../client/format";
-import { bundle, nativeHost } from "./native-host";
+import { bundle, nativeHost, nativePluginCapabilities } from "./native-host";
 
-import { setup, settle } from "./dom";
+import { fixtureOwner, setup, settle } from "./dom";
+import type { ExternalOffer } from "../client/host-source-bridge";
+import { externalOriginSchema } from "../client/external-origin";
+
+for (const outcome of ["published", "aborted", "ambiguous"] as const) {
+  test(`installed capability identity discovers only its registry installation when ${outcome}`, async () => {
+    const { dom } = setup();
+    dom.reconfigure({ url: "paseo://app/h/fixture-host/workspace/workspace-one" });
+    const paseo = { identity: "original" }, client = nativePluginCapabilities(paseo);
+    assert.equal(client.paseo, paseo, "the installed capability must preserve the registry paseo reference");
+    const ids = resolveModuleIds(bundle, { registry: ["pluginRegistry", "useInstalledPlugins"] });
+    let entries: unknown[] = [{ serverId: "foreign-host", paseo: { ...paseo } }];
+    const listeners = new Set<() => void>();
+    const pluginRegistry = { getSnapshot: () => entries, subscribe: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener); } };
+    const originalRequire = Object.getOwnPropertyDescriptor(globalThis, "__r"), originalFetch = globalThis.fetch;
+    const lifetime = new AbortController();
+    const foreign = dom.window.document.createElement("script"); foreign.src = "paseo://foreign/index.js";
+    const own = dom.window.document.createElement("script"); own.src = "paseo://app/index.js";
+    dom.window.document.head.append(foreign, own);
+    Reflect.set(globalThis, "__r", (id: number) => { assert.equal(id, ids.registry); return { pluginRegistry }; });
+    globalThis.fetch = async (url) => { assert.equal(String(url), own.src); return new Response(bundle); };
+    try {
+      let settled = false;
+      const discovery = discoverInstallationOwner({ client, signal: lifetime.signal });
+      void discovery.then(() => { settled = true; }, () => { settled = true; });
+      await settle();
+      assert.equal(settled, false);
+      assert.equal(listeners.size, 1, "contribution startup precedes registry publication");
+      if (outcome === "aborted") {
+        lifetime.abort();
+        await assert.rejects(discovery, /已关闭/);
+      } else {
+        entries = [{ serverId: "fixture-host", paseo }, ...(outcome === "ambiguous" ? [{ serverId: "second-host", paseo }] : [])];
+        for (const listener of listeners) listener();
+        if (outcome === "ambiguous") await assert.rejects(discovery, /唯一/);
+        else assert.deepEqual(await discovery, fixtureOwner);
+      }
+      assert.equal(listeners.size, 0);
+    } finally {
+      lifetime.abort(); globalThis.fetch = originalFetch;
+      if (originalRequire) Object.defineProperty(globalThis, "__r", originalRequire); else Reflect.deleteProperty(globalThis, "__r");
+      dom.window.close();
+    }
+  });
+}
 
 function existingEditor(fixture: ReturnType<typeof setup>) {
   fixture.wrapper.querySelector("[data-paseo-quote-chip]")?.shadowRoot?.querySelector<HTMLButtonElement>("button")?.click();
@@ -30,7 +74,7 @@ for (const dismiss of ["cancel", "Escape", "outside"] as const) {
     const { host } = await nativeHost();
     const fixture = setup(), { binding, input, anchor, dom } = fixture;
     const key = host.key(binding.hostId, binding.agentId);
-    const plugin = installQuoteComposer({ discover: async () => host });
+    const plugin = installQuoteComposer({ owner: fixtureOwner, discover: async () => host });
     try {
       const added = await plugin.add({ composer: input, anchor, agentId: binding.agentId, formattedText: "> original", preview: "original" });
       if (added.kind === "not-written") throw new Error(added.reason);
@@ -63,7 +107,7 @@ for (const save of ["button", "Meta", "Control"] as const) {
     const key = host.key(binding.hostId, binding.agentId);
     const other = { kind: "workspace_file", path: "keep.txt", selection: { kind: "whole_file" } };
     host.save(key, { text: "keep body", attachments: [other] });
-    const plugin = installQuoteComposer({ discover: async () => host });
+    const plugin = installQuoteComposer({ owner: fixtureOwner, discover: async () => host });
     try {
       await plugin.add({ composer: input, anchor, agentId: binding.agentId, formattedText: "> original", preview: "original" });
       for (const comment of ["first line\n第二行", ""]) {
@@ -99,7 +143,7 @@ test("existing edit delete removes only its ID and preserves body and unrelated 
   const key = host.key(binding.hostId, binding.agentId);
   const other = { kind: "workspace_file", path: "keep.txt", selection: { kind: "whole_file" } };
   host.save(key, { text: "keep body", attachments: [other] });
-  const plugin = installQuoteComposer({ discover: async () => host });
+  const plugin = installQuoteComposer({ owner: fixtureOwner, discover: async () => host });
   try {
     for (let i = 0; i < 2; i++) await plugin.add({ composer: input, anchor, agentId: binding.agentId, formattedText: "> same text", preview: "same text" });
     const second = readQuotes(host.read(key))[1];
@@ -129,7 +173,7 @@ for (const operation of ["save", "delete"] as const) {
         await host.flush();
       },
     };
-    const plugin = installQuoteComposer({ discover: async () => controlled });
+    const plugin = installQuoteComposer({ owner: fixtureOwner, discover: async () => controlled });
     try {
       await plugin.add({ composer: input, anchor, agentId: binding.agentId, formattedText: "> original", preview: "original" });
       const { element, field, action } = existingEditor(fixture);
@@ -173,7 +217,7 @@ test("a not-written edit save allows correction before a new explicit save", asy
   const fixture = setup(), { binding, input, anchor, dom } = fixture;
   let reject = false;
   const controlled: DraftHost = { ...host, validateAttachment(value) { if (reject) throw new Error("validation unavailable"); host.validateAttachment(value); } };
-  const plugin = installQuoteComposer({ discover: async () => controlled });
+  const plugin = installQuoteComposer({ owner: fixtureOwner, discover: async () => controlled });
   try {
     await plugin.add({ composer: input, anchor, agentId: binding.agentId, formattedText: "> original", preview: "original" });
     const { element, field, action } = existingEditor(fixture);
@@ -192,7 +236,7 @@ test("a not-written edit save allows correction before a new explicit save", asy
 test("existing edit IME ignores actions and confirmation keys until explicit save after composition", async () => {
   const { host } = await nativeHost();
   const fixture = setup(), { binding, input, anchor, dom } = fixture;
-  const plugin = installQuoteComposer({ discover: async () => host });
+  const plugin = installQuoteComposer({ owner: fixtureOwner, discover: async () => host });
   try {
     await plugin.add({ composer: input, anchor, agentId: binding.agentId, formattedText: "> original", preview: "original" });
     const key = host.key(binding.hostId, binding.agentId), before = structuredClone(host.read(key));
@@ -219,7 +263,7 @@ for (const operation of ["save", "delete"] as const) {
       let hold = false;
       let release: (() => void) | undefined;
       const controlled: DraftHost = { ...host, flush: () => hold ? new Promise<void>((resolve) => { release = resolve; }) : host.flush() };
-      const plugin = installQuoteComposer({ discover: async () => controlled });
+      const plugin = installQuoteComposer({ owner: fixtureOwner, discover: async () => controlled });
       try {
         await plugin.add({ composer: input, anchor, agentId: binding.agentId, formattedText: "> original", preview: "original" });
         const { element, field, action } = existingEditor(fixture);
@@ -338,12 +382,77 @@ test("失败只在写前允许 Markdown fallback；写后异常和 flush 失败�
   dom.window.close();
 });
 
+test("multiple host installations render one annotation pill for a single native draft", async () => {
+  const { host } = await nativeHost();
+  const fixture = setup(), { binding, input, anchor, wrapper, dom } = fixture;
+  const key = host.key(binding.hostId, binding.agentId);
+  const other = { kind: "workspace_file", path: "keep.txt", selection: { kind: "whole_file" } };
+  host.save(key, { text: "keep body", attachments: [other] });
+  let plugin = installQuoteComposer({ owner: fixtureOwner, discover: async () => host });
+  const anotherHostPlugin = installQuoteComposer({ owner: installationOwnerSchema.parse({ hostId: "second-host" }), discover: async () => host });
+  try {
+    const added = await plugin.add({ composer: input, anchor, agentId: binding.agentId, formattedText: "> original", preview: "original" });
+    if (added.kind !== "committed") throw new Error(added.reason);
+    assert.equal((await plugin.setComment(added.ref, "saved comment")).kind, "committed");
+    await settle();
+    const draft = host.read(key);
+    const quotes = readQuotes(draft);
+    assert.equal(quotes.length, 1);
+    assert.equal(quotes[0].item.id, added.ref.id);
+    assert.equal(quotes[0].item.text, "> original\n\nsaved comment");
+    assert.equal(quotes[0].item.subtitle, "saved comment");
+    assert.equal(draft?.text, "keep body");
+    assert.deepEqual(draft?.attachments, [other, quotes[0]]);
+    assert.equal(wrapper.querySelectorAll("[data-paseo-quote-chip]").length, 1, "one saved quote must produce one composer pill across host installations");
+    assert.equal((await anotherHostPlugin.add({ composer: input, anchor, agentId: binding.agentId, formattedText: "> foreign", preview: "foreign" })).kind, "not-written");
+    const { element, field } = existingEditor(fixture);
+    field.value = "unsaved owner edit";
+    field.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+    anotherHostPlugin.dispose(); await settle();
+    assert.equal(element.isConnected, true); assert.equal(field.value, "unsaved owner edit");
+    assert.deepEqual(host.read(key), draft);
+    plugin.dispose();
+    plugin = installQuoteComposer({ owner: fixtureOwner, discover: async () => host });
+    await settle();
+    assert.equal(wrapper.querySelectorAll("[data-paseo-quote-chip]").length, 1);
+    assert.deepEqual(host.read(key), draft);
+  } finally { anotherHostPlugin.dispose(); plugin.dispose(); await host.flush(); dom.window.close(); }
+});
+
+test("external source ownership preserves the offered recipient and its draft key", async () => {
+  const { host } = await nativeHost();
+  const { binding, anchor, dom } = setup();
+  const recipient = installationOwnerSchema.parse({ hostId: "recipient-host" });
+  const key = host.key(recipient.hostId, binding.agentId);
+  const other = { kind: "workspace_file", path: "keep.txt", selection: { kind: "whole_file" } };
+  host.save(key, { text: "recipient body", attachments: [other] });
+  const controlled: DraftHost = { ...host, hasAgent: (hostId, agentId) => hostId === recipient.hostId && agentId === binding.agentId || host.hasAgent(hostId, agentId) };
+  const plugin = installQuoteComposer({ owner: fixtureOwner, discover: async () => controlled });
+  const target: StoreBinding = { kind: "store", hostId: recipient.hostId, agentId: binding.agentId, draftKey: key, anchor, pane: binding.pane, label: "explicit recipient", validate: () => true };
+  const offer = (serverId: string): ExternalOffer => ({ root: anchor, selectionToken: {}, label: "markdown", recipients: [target], preferred: target, validForAdd: () => true,
+    snapshot: Promise.resolve({ text: "selected source", title: "source.md", origin: externalOriginSchema.parse({ kind: "markdown", workspace: { serverId, workspaceId: "workspace-one", workspaceKey: "workspace-key", root: "/workspace" }, tabId: "source-tab", file: { requestedPath: "source.md", absolutePath: "/workspace/source.md", relativePath: "source.md" }, version: { algorithm: "sha256", digest: "a".repeat(64) } }) }),
+    source: { valid: () => true, geometry: () => ({ kind: "unavailable" }), reveal: async () => ({ kind: "unavailable", reason: "fixture" }) },
+  });
+  try {
+    const added = await plugin.addExternal(offer(fixtureOwner.hostId), target);
+    if (added.kind !== "committed") throw new Error(added.reason);
+    assert.equal(added.ref.binding.hostId, recipient.hostId);
+    assert.equal((await plugin.setComment(added.ref, "recipient comment")).kind, "committed");
+    const before = host.read(key);
+    assert.equal(before?.text, "recipient body"); assert.deepEqual(before?.attachments[0], other);
+    assert.equal(readQuotes(before)[0].item.subtitle, "recipient comment");
+    assert.equal(host.read(host.key(fixtureOwner.hostId, binding.agentId)), undefined);
+    assert.equal((await plugin.addExternal(offer("second-host"), target)).kind, "not-written");
+    assert.deepEqual(host.read(key), before);
+  } finally { plugin.dispose(); await host.flush(); dom.window.close(); }
+});
+
 test("chip 从原生草稿派生计数、只读预览、Esc 避开宿主 window 捕获、按 ID 移除和清理", async () => {
   const { host, resolveKeyboardFocusScope } = await nativeHost();
   const { binding, input, anchor, wrapper, dom } = setup();
   const key = host.key(binding.hostId, binding.agentId);
   host.save(key, { text: "保留的补充问题", attachments: [] });
-  const plugin = installQuoteComposer({ discover: async () => host });
+  const plugin = installQuoteComposer({ owner: fixtureOwner, discover: async () => host });
   await plugin.add({ composer: input, anchor, agentId: "agent-one", formattedText: "> <img src=x onerror=alert(1)>", preview: "第一段" });
   await plugin.add({ composer: input, anchor, agentId: "agent-one", formattedText: "> 第二段全文", preview: "第二段" });
   assert.equal(dom.window.document.activeElement, input);
@@ -417,7 +526,7 @@ test("host 路由解析只提供 host，agent 必须经 pane 和目录独立确�
  test("selected node removal preserves transcript draft binding and chip mounts in inner card", async () => {
   const { host } = await nativeHost();
   const { binding, input, anchor, wrapper, dom } = setup();
-  const plugin = installQuoteComposer({ discover: async () => host });
+  const plugin = installQuoteComposer({ owner: fixtureOwner, discover: async () => host });
   const added = await plugin.add({ composer: input, anchor, agentId: binding.agentId, formattedText: "> original", preview: "original" });
   assert.equal(wrapper.querySelector("[data-paseo-quote-chip]")?.parentElement, wrapper);
   if (added.kind === "not-written") throw new Error(added.reason);
@@ -436,7 +545,7 @@ test("middle removal preserves keyed rows and scroll; summary follows current ch
   dom.window.Range.prototype.getClientRects = () => Object.assign([selectionRect], { item: () => selectionRect });
   dom.window.Range.prototype.getBoundingClientRect = () => selectionRect;
   const range = dom.window.document.createRange(); range.selectNodeContents(anchor);
-  const plugin = installQuoteComposer({ discover: async () => host });
+  const plugin = installQuoteComposer({ owner: fixtureOwner, discover: async () => host });
   const key = host.key(binding.hostId, binding.agentId);
   const other = { kind: "workspace_file", path: "keep.txt", selection: { kind: "whole_file" } };
   host.save(key, { text: "unchanged body", attachments: [other] });
@@ -485,7 +594,7 @@ test("unvalidated card leaves native pills visible", async () => {
   const { host } = await nativeHost();
   const { input, anchor, wrapper, dom } = setup();
   wrapper.style.border = "none";
-  const plugin = installQuoteComposer({ discover: async () => host });
+  const plugin = installQuoteComposer({ owner: fixtureOwner, discover: async () => host });
   const added = await plugin.add({ composer: input, anchor, agentId: "agent-one", formattedText: "> quote", preview: "quote" });
   assert.notEqual(added.kind, "not-written");
   assert.equal(wrapper.querySelector("[data-paseo-quote-chip]"), null);
@@ -507,7 +616,7 @@ for (const pendingFlush of [false, true]) {
         await host.flush();
       },
     };
-    const plugin = installQuoteComposer({ discover: async () => controlled });
+    const plugin = installQuoteComposer({ owner: fixtureOwner, discover: async () => controlled });
     try {
       const added = await plugin.add({ composer: input, anchor, agentId: binding.agentId, formattedText: "> original", preview: "original", openComment: true });
       assert.equal(added.kind, "committed");
@@ -541,7 +650,7 @@ test("late add completion never reopens an editor after host or pane changes", a
   for (const change of ["host", "pane"] as const) {
     const { binding, input, anchor, dom } = setup();
     let resume: (() => void) | undefined;
-    const plugin = installQuoteComposer({ discover: async () => ({ ...host, flush: () => new Promise<void>((resolve) => { resume = resolve; }) }) });
+    const plugin = installQuoteComposer({ owner: fixtureOwner, discover: async () => ({ ...host, flush: () => new Promise<void>((resolve) => { resume = resolve; }) }) });
     const adding = plugin.add({ composer: input, anchor, agentId: binding.agentId, formattedText: "> original", preview: "original", openComment: true });
     await settle();
     assert.equal(typeof resume, "function");
@@ -570,7 +679,7 @@ test("uncertain add with no readback retains the field and retries the same atta
     if (fail) throw new Error("before native save");
     host.save(key, value);
   } };
-  const plugin = installQuoteComposer({ discover: async () => controlled });
+  const plugin = installQuoteComposer({ owner: fixtureOwner, discover: async () => controlled });
   const adding = plugin.add({ composer: input, anchor, agentId: binding.agentId, formattedText: "> original", preview: "original", openComment: true });
   const editor = dom.window.document.querySelector("[data-paseo-quote-editor]");
   const field = editor?.querySelector("textarea");
@@ -604,7 +713,7 @@ for (const finish of ["Escape", "Enter", "button", "outside"] as const) {
         },
         async flush() { if (fail && failure === "flush") throw new Error("flush failed"); await host.flush(); },
       };
-      const plugin = installQuoteComposer({ discover: () => new Promise<DraftHost>((resolve) => { resume = resolve; }) });
+      const plugin = installQuoteComposer({ owner: fixtureOwner, discover: () => new Promise<DraftHost>((resolve) => { resume = resolve; }) });
       try {
         const adding = plugin.add({ composer: input, anchor, agentId: binding.agentId, formattedText: "> original", preview: "original", openComment: true });
         const editor = dom.window.document.querySelector("[data-paseo-quote-editor]");
@@ -653,7 +762,7 @@ for (const phase of ["adding", "saving"] as const) {
       const flushes: Array<() => void> = [];
       const controlled: DraftHost = { ...host, flush: () => holdFlush
         ? new Promise<void>((resolve) => { flushes.push(resolve); }) : host.flush() };
-      const plugin = installQuoteComposer({ discover: phase === "adding"
+      const plugin = installQuoteComposer({ owner: fixtureOwner, discover: phase === "adding"
         ? () => new Promise<DraftHost>((resolve) => { resumeDiscovery = resolve; })
         : async () => controlled });
       try {
@@ -697,7 +806,7 @@ for (const surface of ["editor", "preview"] as const) {
     const { host } = await nativeHost();
     const { binding, input, anchor, wrapper, dom } = setup();
     binding.pane.getBoundingClientRect = () => new dom.window.DOMRect(500, 100, 400, 650);
-    const plugin = installQuoteComposer({ discover: async () => host });
+    const plugin = installQuoteComposer({ owner: fixtureOwner, discover: async () => host });
     try {
       await plugin.add({ composer: input, anchor, agentId: binding.agentId, formattedText: "> original", preview: "original", openComment: surface === "editor" });
       const chip = wrapper.querySelector("[data-paseo-quote-chip]")?.shadowRoot?.querySelector("button");

@@ -3,9 +3,13 @@
   "name": "Codex Style Annotations",
   "description": "Annotate selected chat, file, Markdown, Diff, and terminal text with optional comments.",
   "media": [
-    "assets/preview.png"
+    "assets/preview.png",
+    "assets/workspace-sources.png",
+    "assets/draft-and-sent.png",
+    "assets/interface/draft-summary.png"
   ],
   "requirements": {
     "paseo": ">=0.11.4"
-  }
+  },
+  "icon": "assets/icon.png"
 }

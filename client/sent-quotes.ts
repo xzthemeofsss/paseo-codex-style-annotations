@@ -2,10 +2,10 @@ import { z } from "zod";
 import { ANNOTATION_ICON, annotationPalette } from "./annotation-visuals";
 import { discoverSentNative, type SentNative } from "./sent-native";
 import { quotePluginIdSchema } from "./quote-identity";
+import type { InstallationOwner } from "./host-draft-bridge";
 
 const NATIVE = '[data-testid="user-message"]';
 const OWNED = "data-paseo-sent-quotes";
-const owners = new WeakSet<Document>();
 const HIDDEN = "data-paseo-sent-quote-hidden";
 const propsSchema = z.object({ serverId: z.string().min(1), agentId: z.string().min(1), messageId: z.string().min(1).optional(),
   message: z.string(), images: z.array(z.unknown()).default([]), attachments: z.array(z.unknown()).default([]), isPending: z.boolean().default(false) });
@@ -37,10 +37,9 @@ button:hover{background:var(--quote-hover)}button:focus-visible{outline:2px soli
 .entry-head{display:flex;align-items:center;justify-content:space-between;gap:12px;color:var(--quote-muted)}.entry-head>span{min-width:0;overflow-wrap:anywhere}.copy{flex-shrink:0;white-space:nowrap;border:0;border-radius:5px;background:transparent;padding:3px 6px}pre{font:inherit;white-space:pre-wrap;overflow-wrap:anywhere;margin:7px 0 0;user-select:text;-webkit-user-select:text}
 `;
 
-export function installSentQuotes(options: { discover?: (signal: AbortSignal) => Promise<SentNative> } = {}): () => void {
-  if (typeof document === "undefined" || typeof window === "undefined" || owners.has(document)) return () => {};
+export function installSentQuotes(options: { owner: InstallationOwner; discover?: (signal: AbortSignal) => Promise<SentNative> }): () => void {
+  if (typeof document === "undefined" || typeof window === "undefined") return () => {};
   const doc = document, view = window;
-  owners.add(doc);
   const lifetime = new AbortController();
   const decorations = new Map<HTMLElement, Decoration>();
   const relinquished = new WeakSet<HTMLElement>();
@@ -130,7 +129,7 @@ export function installSentQuotes(options: { discover?: (signal: AbortSignal) =>
     const current = committed.current, owner = committed.rows.get(native);
     if (!owner) return;
     const parsed = propsSchema.safeParse(owner.memoizedProps);
-    if (!parsed.success || native.getAttribute("aria-busy") !== String(parsed.data.isPending)) return;
+    if (!parsed.success || parsed.data.serverId !== options.owner.hostId || native.getAttribute("aria-busy") !== String(parsed.data.isPending)) return;
     const props = parsed.data;
     const localId = row.getAttribute("data-message-id");
     if (!localId?.trim() || (row.hasAttribute("data-history-row-id") && row.getAttribute("data-history-row-id") !== localId)) return;
@@ -346,6 +345,6 @@ export function installSentQuotes(options: { discover?: (signal: AbortSignal) =>
     doc.removeEventListener("pointerdown", onOutside, true); doc.removeEventListener("visibilitychange", onVisible);
     view.removeEventListener("resize", onViewport); view.removeEventListener("scroll", onViewport, true);
     for (const decoration of decorations.values()) remove(decoration);
-    decorations.clear(); owners.delete(doc);
+    decorations.clear();
   };
 }

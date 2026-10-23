@@ -101,3 +101,13 @@ export async function nativeHost(seed: ReadonlyMap<string, string> = new Map()) 
   const resolveKeyboardFocusScope = z.object({ resolveKeyboardFocusScope: callable }).parse(load(extras.focus)).resolveKeyboardFocusScope;
   return { host, ids, storage, converter, Publication, store, getState, resolveKeyboardFocusScope };
 }
+
+export function nativePluginCapabilities(paseo: object) {
+  const id = resolveModuleIds(bundle, { capabilities: ["createPluginCapabilities", "createPluginAgentActionContext"] }).capabilities;
+  const definition = registered.get(id);
+  if (!definition) throw new Error("Missing installed plugin capabilities module");
+  const module = { exports: {} };
+  definition.factory(globalThis, () => ({}), undefined, undefined, module, module.exports, definition.dependencies);
+  const capabilities = z.object({ createPluginCapabilities: callable }).parse(module.exports);
+  return z.object({ paseo: z.unknown() }).parse(capabilities.createPluginCapabilities({ paseo }, {}));
+}

@@ -1,5 +1,7 @@
 import { JSDOM } from "jsdom";
-import { bindComposer } from "../client/host-draft-bridge";
+import { bindComposer, installationOwnerSchema } from "../client/host-draft-bridge";
+
+export const fixtureOwner = installationOwnerSchema.parse({ hostId: "fixture-host" });
 
 export function setup() {
   const dom = new JSDOM(`<html><head></head><body><div data-testid="workspace-pane-one"><div data-testid="workspace-tab-agent_agent-one" aria-selected="true"></div><div data-testid="agent-chat-scroll"><p id="selection">原始引用内容</p></div><div data-testid="message-input-root"><div id="presentation"><div id="wrapper" style="display:flex;flex-direction:column;border:1px solid #444;border-radius:12px;background:rgb(255,255,255)"><textarea data-composer-input></textarea></div></div></div></div></body></html>`, { pretendToBeVisual: true, url: "https://app.paseo.test/h/fixture-host/workspace/workspace-one" });

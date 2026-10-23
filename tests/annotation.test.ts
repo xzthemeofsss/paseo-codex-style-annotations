@@ -5,7 +5,7 @@ import { decodeAnnotation, encodeAnnotation } from "../client/format";
 import { makeQuote, mutateQuotes, quoteAttachmentSchema, readQuotes, writeQuoteComment, type DraftHost } from "../client/host-draft-bridge";
 import { installQuoteComposer } from "../client/quote-composer";
 import { nativeHost } from "./native-host";
-import { setup, settle } from "./dom";
+import { fixtureOwner, setup, settle } from "./dom";
 
 test("评论 codec 保留原文、空评论、多行和相同 suffix，旧引用不猜分隔", () => {
   for (const quote of ["> 原文\n\n尾句", "```ts\n  const answer = 42;\n```\n", "> 尾句\n\n尾句"]) {
@@ -96,7 +96,7 @@ test("连续输入同步写最新值，旧 flush 结果不恢复已移除或发�
   let holdFlush = false;
   const flushes: Array<() => void> = [];
   const controlled: DraftHost = { ...host, flush: () => holdFlush ? new Promise<void>((resolve) => flushes.push(resolve)) : host.flush() };
-  const plugin = installQuoteComposer({ discover: async () => controlled });
+  const plugin = installQuoteComposer({ owner: fixtureOwner, discover: async () => controlled });
   const added = await plugin.add({ composer: input, anchor, agentId: binding.agentId, formattedText: "> 原文", preview: "原文" });
   if (added.kind !== "committed") throw new Error("Fixture add failed");
   const key = host.key(binding.hostId, binding.agentId);
@@ -134,7 +134,7 @@ test("连续输入同步写最新值，旧 flush 结果不恢复已移除或发�
 test("compact summary opens staged editing with editable host, IME and Escape discarding the buffer", async () => {
   const { host, resolveKeyboardFocusScope } = await nativeHost();
   const { binding, input, anchor, wrapper, dom } = setup();
-  const plugin = installQuoteComposer({ discover: async () => host });
+  const plugin = installQuoteComposer({ owner: fixtureOwner, discover: async () => host });
   await plugin.add({ composer: input, anchor, agentId: binding.agentId, formattedText: "> 原文", preview: "原文" });
   const chip = wrapper.querySelector("[data-paseo-quote-chip]")?.shadowRoot?.querySelector("button");
   chip?.click();

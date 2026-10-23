@@ -36,11 +36,11 @@
   "author": "xzthemeofsss",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/xzthemeofsss/paseo-codex-style-annotations.git"
+    "url": "git+https://github.com/xzthemeofsss/paseo-plugins.git"
   },
-  "homepage": "https://github.com/xzthemeofsss/paseo-codex-style-annotations#readme",
+  "homepage": "https://github.com/xzthemeofsss/paseo-plugins#readme",
   "bugs": {
-    "url": "https://github.com/xzthemeofsss/paseo-codex-style-annotations/issues"
+    "url": "https://github.com/xzthemeofsss/paseo-plugins/issues"
   },
   "keywords": [
     "paseo",

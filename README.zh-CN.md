@@ -2,6 +2,9 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
+`paseo-plugins` 收录我自己维护的公开 Paseo 插件。Codex Style Annotations
+目前位于仓库根目录，插件 ID 仍为 `quote-notes`。
+
 把你指的那段原文交给 Paseo Agent。在聊天、文件、Markdown 预览、Diff 或终端中选中文字，将其添加到对话，再按需补充评论。
 
 ![选中的原文、可选评论和紧凑的草稿注释。界面示意图使用示例内容。](assets/preview.png)
@@ -85,7 +88,7 @@ paseo plugin add xzthemeofsss/quote-notes
 如需直接安装源码发布版本，使用：
 
 ```bash
-paseo plugin add git:xzthemeofsss/paseo-codex-style-annotations --ref v0.2.1
+paseo plugin add git:xzthemeofsss/paseo-plugins --ref v0.2.1
 ```
 
 市场使用已经审查的版本；上面的直接安装命令选择 `v0.2.1` 源码发布版本。

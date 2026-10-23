@@ -2,6 +2,9 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
+`paseo-plugins` holds my maintained public Paseo plugins. Codex Style Annotations
+currently lives at the repository root. The plugin ID remains `quote-notes`.
+
 Give your Paseo agent the exact text you mean. Select a passage in a chat, file, Markdown preview, Diff, or terminal, add it to a conversation, and leave a comment when you need one.
 
 ![Selected text, an optional comment, and a compact draft annotation. Interface illustration with sample content.](assets/preview.png)
@@ -85,7 +88,7 @@ Skip the disable command if `quote` is not installed. The runtime ID remains `qu
 To install the source release directly, use:
 
 ```bash
-paseo plugin add git:xzthemeofsss/paseo-codex-style-annotations --ref v0.2.1
+paseo plugin add git:xzthemeofsss/paseo-plugins --ref v0.2.1
 ```
 
 The marketplace uses its reviewed revision. The direct command above selects the `v0.2.1` source release.

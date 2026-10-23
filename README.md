@@ -85,10 +85,10 @@ Skip the disable command if `quote` is not installed. The runtime ID remains `qu
 To install the source release directly, use:
 
 ```bash
-paseo plugin add git:xzthemeofsss/paseo-codex-style-annotations --ref v0.2.0
+paseo plugin add git:xzthemeofsss/paseo-codex-style-annotations --ref v0.2.1
 ```
 
-The marketplace uses its reviewed revision. The direct command above selects the `v0.2.0` source release.
+The marketplace uses its reviewed revision. The direct command above selects the `v0.2.1` source release.
 
 ## Data access and compatibility
 

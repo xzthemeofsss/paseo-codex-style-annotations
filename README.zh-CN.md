@@ -85,10 +85,10 @@ paseo plugin add xzthemeofsss/quote-notes
 如需直接安装源码发布版本，使用：
 
 ```bash
-paseo plugin add git:xzthemeofsss/paseo-codex-style-annotations --ref v0.2.0
+paseo plugin add git:xzthemeofsss/paseo-codex-style-annotations --ref v0.2.1
 ```
 
-市场使用已经审查的版本；上面的直接安装命令选择 `v0.2.0` 源码发布版本。
+市场使用已经审查的版本；上面的直接安装命令选择 `v0.2.1` 源码发布版本。
 
 ## 数据和兼容性
 

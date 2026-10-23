@@ -7,7 +7,7 @@ import { installQuoteComposer } from "./quote-composer";
 import type { ExternalOffer, ExternalSelection } from "./host-source-bridge";
 import type { AnnotationPreferences } from "./annotation-preferences";
 import type { AnnotationKind } from "../shared/preferences";
-import type { StoreBinding } from "./host-draft-bridge";
+import { currentHostId, discoverInstallationOwner, type InstallationOwner, type StoreBinding } from "./host-draft-bridge";
 import type { SettingsLanguage } from "./settings-language";
 import { toolbarCopy } from "./toolbar-copy";
 
@@ -160,6 +160,7 @@ interface DomDataTransfer {
 }
 
 declare const window: DomEventTarget & {
+  readonly location: { readonly href: string };
   readonly innerWidth: number;
   readonly innerHeight: number;
   getSelection(): DomSelection | null;
@@ -429,8 +430,18 @@ function clamp(value: number, min: number, max: number): number {
 /** Installs the selection bar. Returns cleanup; a no-op off the web. */
 export function installSelectionBar(client: PluginClientContext, preferences?: AnnotationPreferences, language?: SettingsLanguage): () => void {
  if (Platform.OS !== "web" || typeof document === "undefined") return () => {};
- const quotes = installQuoteComposer({ preferences });
- const removeSentQuotes = installSentQuotes();
+ const lifetime = new AbortController();
+ let remove = () => {};
+ void discoverInstallationOwner({ client, signal: lifetime.signal }).then((owner) => {
+  if (!lifetime.signal.aborted) remove = installOwnedSelectionBar(client, owner, preferences, language);
+  return undefined;
+ }).catch((cause: unknown) => { if (!lifetime.signal.aborted) console.warn("annotation_initialization_failed", { cause }); });
+ return () => { lifetime.abort(); remove(); };
+}
+
+function installOwnedSelectionBar(client: PluginClientContext, owner: InstallationOwner, preferences?: AnnotationPreferences, language?: SettingsLanguage): () => void {
+ const quotes = installQuoteComposer({ owner, preferences });
+ const removeSentQuotes = installSentQuotes({ owner });
  const host = document.createElement("div");
  host.setAttribute("data-paseo-quote", "");
  host.setAttribute("contenteditable", "true");
@@ -601,6 +612,7 @@ export function installSelectionBar(client: PluginClientContext, preferences?: A
   field.focus({ preventScroll: true });
  };
  const askSide = () => {
+  if (currentHostId(window.location.href) !== owner.hostId) { hide(); return; }
   if (interaction.kind !== "side" || interaction.status !== "editing" || !interaction.snapshot.agentId || !field.value.trim()) return;
   const current = interaction;
   const agentId = current.snapshot.agentId;
@@ -625,6 +637,7 @@ export function installSelectionBar(client: PluginClientContext, preferences?: A
  const actions: Record<string, () => void> = { quote, side: openSide, cancel: hide, ask: askSide };
  const onPanelPointerDown: DomListener = (event) => { if (event.target !== field && event.target !== receiver) event.preventDefault(); };
  const onPanelClick: DomListener = (event) => {
+  if (currentHostId(window.location.href) !== owner.hostId) { hide(); return; }
   const target = elementOf(event.target)?.closest("button[data-action]") as DomButton | null;
   const action = target?.getAttribute("data-action");
   if (action && !target!.disabled) actions[action]?.();
@@ -654,6 +667,7 @@ export function installSelectionBar(client: PluginClientContext, preferences?: A
  host.addEventListener("keydown", onHostKeyDown, true);
  const sync = () => {
   pending = 0;
+  if (currentHostId(window.location.href) !== owner.hostId) { hide(); return; }
   if (interaction.kind === "side") return;
   const next = readSnapshot(host);
   if (next) showBar(next); else if (interaction.kind === "selection") hide();
@@ -675,6 +689,8 @@ export function installSelectionBar(client: PluginClientContext, preferences?: A
  document.addEventListener("selectionchange", onSelectionChange);
  window.addEventListener("scroll", onViewportChange, true);
  window.addEventListener("resize", onViewportChange);
+ window.addEventListener("popstate", schedule);
+ window.addEventListener("hashchange", schedule);
  return () => {
   disposed = true;
   stopLanguage(); stopPolicy(); stopExternal(); receiver.removeEventListener("change", changeReceiver); quotes.dispose();
@@ -686,6 +702,8 @@ export function installSelectionBar(client: PluginClientContext, preferences?: A
   document.removeEventListener("selectionchange", onSelectionChange);
   window.removeEventListener("scroll", onViewportChange, true);
   window.removeEventListener("resize", onViewportChange);
+  window.removeEventListener("popstate", schedule);
+  window.removeEventListener("hashchange", schedule);
   panel.removeEventListener("mousedown", onPanelPointerDown);
   panel.removeEventListener("click", onPanelClick);
   field.removeEventListener("keydown", onFieldKeyDown);

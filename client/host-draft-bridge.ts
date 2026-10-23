@@ -3,6 +3,8 @@ import { decodeAnnotation, encodeAnnotation } from "./format";
 import { QUOTE_PLUGIN_ID, quotePluginIdSchema } from "./quote-identity";
 
 const callable = z.custom<(...args: unknown[]) => unknown>((value) => typeof value === "function");
+export const installationOwnerSchema = z.object({ hostId: z.string().min(1).brand<"HostId">() }).readonly();
+export type InstallationOwner = z.infer<typeof installationOwnerSchema>;
 const schema = z.object({ safeParse: callable });
 const quoteId = z.string().uuid().brand<"QuoteId">();
 export type QuoteId = z.infer<typeof quoteId>;
@@ -367,4 +369,49 @@ export async function discoverDraftHost(signal: AbortSignal): Promise<DraftHost>
     return createDraftHost((id) => runtime.__r(id), ids);
   }
   throw new Error("未找到 Paseo 草稿接口，使用普通引用。");
+}
+
+export async function discoverInstallationOwner(input: { client: { readonly paseo: unknown }; signal: AbortSignal }): Promise<InstallationOwner> {
+  const { client, signal } = input;
+  const paseo = z.custom<object>((value) => value !== null && (typeof value === "object" || typeof value === "function")).parse(client.paseo);
+  if (signal.aborted) throw new Error("注释插件已关闭。");
+  const requireModule = callable.parse(Reflect.get(globalThis, "__r")), base = new URL(window.location.href);
+  for (const script of document.scripts) {
+    if (!script.src) continue;
+    const url = new URL(script.src, base);
+    if (url.host !== base.host || url.protocol !== base.protocol) continue;
+    const response = await fetch(url, { signal });
+    if (!response.ok) continue;
+    const source = await response.text();
+    if (signal.aborted) throw new Error("注释插件已关闭。");
+    if (!source.includes("pluginRegistry")) continue;
+    const ids = resolveModuleIds(source, { registry: ["pluginRegistry", "useInstalledPlugins"] });
+    const registry = z.object({ pluginRegistry: z.preprocess((value) => properties(value, ["getSnapshot", "subscribe"]), z.object({ getSnapshot: callable, subscribe: callable })) }).parse(requireModule(ids.registry)).pluginRegistry;
+    return new Promise<InstallationOwner>((resolve, reject) => {
+      let unsubscribe = () => {};
+      let finished = false;
+      const finish = (outcome: { owner: InstallationOwner } | { error: unknown }) => {
+        if (finished) return;
+        finished = true; unsubscribe(); signal.removeEventListener("abort", abort);
+        if ("owner" in outcome) resolve(outcome.owner); else reject(outcome.error);
+      };
+      const abort = () => finish({ error: new Error("注释插件已关闭。") });
+      const read = () => {
+        if (signal.aborted) { abort(); return; }
+        try {
+          const entries = z.array(z.object({ serverId: z.string().min(1), paseo: z.unknown() })).parse(registry.getSnapshot());
+          const matches = entries.filter((entry) => entry.paseo === paseo);
+          if (matches.length > 1) throw new Error("无法唯一确认注释插件所属主机。");
+          if (matches.length === 1) finish({ owner: installationOwnerSchema.parse({ hostId: matches[0].serverId }) });
+        } catch (error) { finish({ error }); }
+      };
+      signal.addEventListener("abort", abort, { once: true });
+      try {
+        const stop = callable.parse(registry.subscribe(read));
+        unsubscribe = () => { stop(); };
+        if (finished) unsubscribe(); else read();
+      } catch (error) { finish({ error }); }
+    });
+  }
+  throw new Error("未找到注释插件所属主机接口。");
 }

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { resolveModuleIds, reason, type StoreBinding } from "./host-draft-bridge";
+import { currentHostId, resolveModuleIds, reason, type InstallationOwner, type StoreBinding } from "./host-draft-bridge";
 import { fingerprint, type ExternalOrigin, type ExternalSnapshot, type FileIdentity, type WorkspaceIdentity } from "./external-origin";
 import type { ExternalLiveSource, SourceGeometry } from "./quote-sources";
 
@@ -84,7 +84,7 @@ export interface SourceHost {
   dispose(): void;
 }
 
-export function createSourceHost(requireModule: (id: number) => unknown, source: string): SourceHost {
+export function createSourceHost(requireModule: (id: number) => unknown, source: string, installationOwner: InstallationOwner): SourceHost {
   const ids = resolveModuleIds(source, SOURCE_MODULE_SIGNATURES);
   const routes = functions(requireModule(ids.routes), ["parseHostWorkspaceRouteFromPathname"]);
   const identity = functions(requireModule(ids.workspaceIdentity), ["resolveWorkspaceMapKeyByIdentity"]);
@@ -106,6 +106,7 @@ export function createSourceHost(requireModule: (id: number) => unknown, source:
   let disposed = false, contextRevision = 0;
   const scope = (context?: z.infer<typeof paneContextSchema>): WorkspaceIdentity => {
     const route = routeSchema.parse(routes.parseHostWorkspaceRouteFromPathname(window.location.pathname));
+    if (route.serverId !== installationOwner.hostId) throw new Error("原文不属于当前插件主机。");
     const state = z.object({ sessions: z.record(z.string(), z.unknown()) }).parse(sessions.getState());
     const session = directorySchema.parse(state.sessions[route.serverId]);
     const workspaceId = nonempty.parse(identity.resolveWorkspaceMapKeyByIdentity({ workspaces: session.workspaces, workspaceId: route.workspaceId }));
@@ -507,6 +508,7 @@ export function createSourceHost(requireModule: (id: number) => unknown, source:
   const capture: SourceHost["capture"] = (target) => {
     if (disposed) return null;
     reconcileRoute();
+    if (currentHostId(window.location.href) !== installationOwner.hostId) return null;
     const selection = window.getSelection(), root = rootFor(target) ?? rootFor(selection?.anchorNode);
     if (!root || !visible(root)) return null;
     try {
@@ -582,14 +584,14 @@ export function resolveSemanticModuleIds(source: string, signatures: Record<stri
   return ids;
 }
 
-export async function discoverSourceHost(signal: AbortSignal): Promise<SourceHost> {
+export async function discoverSourceHost({ owner, signal }: { owner: InstallationOwner; signal: AbortSignal }): Promise<SourceHost> {
   const runtime = z.object({ __r: callable }).parse(globalThis), base = new URL(window.location.href);
   const urls = Array.from(document.scripts).flatMap((script) => { if (!script.src) return []; const url = new URL(script.src, base); return url.origin === base.origin && url.protocol === base.protocol ? [url.href] : []; });
   for (const url of urls) {
     const response = await fetch(url, { signal }); if (!response.ok) continue;
     const source = await response.text(); if (signal.aborted) throw new Error("注释插件已关闭。");
     if (!source.includes("useWorkspaceLayoutStore")) continue;
-    return createSourceHost((id) => runtime.__r(id), source);
+    return createSourceHost((id) => runtime.__r(id), source, owner);
   }
   throw new Error("未找到工作区原文选择接口。");
 }

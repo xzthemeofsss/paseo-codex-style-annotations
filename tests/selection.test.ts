@@ -5,22 +5,65 @@ import { test } from "node:test";
 import { build } from "esbuild";
 import { z } from "zod";
 import { installQuoteComposer } from "../client/quote-composer";
-import { readQuotes, type DraftHost } from "../client/host-draft-bridge";
+import * as draftBridge from "../client/host-draft-bridge";
+import { readQuotes, type DraftHost, type InstallationOwner } from "../client/host-draft-bridge";
 import { nativeHost } from "./native-host";
-import { setup, settle } from "./dom";
+import { fixtureOwner, setup, settle } from "./dom";
+import type { AnnotationPreferences } from "../client/annotation-preferences";
 
-const bundled = build({ entryPoints: [new URL("../client/web.ts", import.meta.url).pathname], bundle: true, write: false, platform: "node", format: "cjs", external: ["react-native", "./quote-composer"] });
-async function selectionBar(host: DraftHost) {
+const bundled = build({ entryPoints: [new URL("../client/web.ts", import.meta.url).pathname], bundle: true, write: false, platform: "node", format: "cjs", external: ["react-native", "./quote-composer", "./host-draft-bridge"] });
+async function selectionBar(host: DraftHost, discoverOwner: (input: { signal: AbortSignal }) => Promise<InstallationOwner> = async () => fixtureOwner) {
   const result = await bundled;
   const module = { exports: {} };
   const nativeRequire = createRequire(import.meta.url);
   compileFunction(result.outputFiles[0].text, ["require", "module", "exports"])((name: string) => {
     if (name === "react-native") return { Platform: { OS: "web" } };
-    if (name === "./quote-composer") return { installQuoteComposer: () => installQuoteComposer({ discover: async () => host }) };
+    if (name === "./quote-composer") return { installQuoteComposer: (options: Parameters<typeof installQuoteComposer>[0]) => installQuoteComposer({ ...options, discover: async () => host }) };
+    if (name === "./host-draft-bridge") return { ...draftBridge, discoverInstallationOwner: discoverOwner };
     return nativeRequire(name);
   }, module, module.exports);
-  return z.object({ installSelectionBar: z.custom<(client: { paseo: unknown; openPanel: (...args: unknown[]) => void }) => () => void>((value) => typeof value === "function") }).parse(module.exports).installSelectionBar;
+  return z.object({ installSelectionBar: z.custom<(client: { paseo: unknown; openPanel: (...args: unknown[]) => void }, preferences?: AnnotationPreferences) => () => void>((value) => typeof value === "function") }).parse(module.exports).installSelectionBar;
 }
+
+test("two installed toolbars follow their host route and preferences without reinstalling", async () => {
+  const { host } = await nativeHost();
+  const { dom, anchor } = setup();
+  const secondOwner = draftBridge.installationOwnerSchema.parse({ hostId: "second-host" });
+  const values = { chat: false, file: true, diff: true, markdown: true, terminal: true };
+  const disabled: AnnotationPreferences = { state: () => ({ status: "ready", values }), refresh: async () => {}, accept() {}, enabled: (kind) => values[kind], check: async () => ({ allowed: false, reason: "disabled" }), subscribe: () => () => {}, dispose() {} };
+  const first = (await selectionBar(host))({ paseo: {}, openPanel() {} });
+  const second = (await selectionBar(host, async () => secondOwner))({ paseo: {}, openPanel() {} }, disabled);
+  try {
+    await settle();
+    const rect = new dom.window.DOMRect(100, 100, 100, 20);
+    dom.window.Range.prototype.getClientRects = () => Object.assign([rect], { item: () => rect });
+    dom.window.Range.prototype.getBoundingClientRect = () => rect;
+    const range = dom.window.document.createRange(); range.selectNodeContents(anchor); dom.window.getSelection()?.addRange(range);
+    const visible = () => [...dom.window.document.querySelectorAll<HTMLElement>("[data-paseo-quote]")].filter((element) => element.style.display !== "none");
+    anchor.dispatchEvent(new dom.window.Event("pointerup", { bubbles: true })); await settle();
+    assert.equal(visible().length, 1);
+    assert.equal(visible()[0].shadowRoot?.querySelector<HTMLButtonElement>('[data-action="quote"]')?.disabled, false);
+    dom.window.history.replaceState({}, "", "/h/second-host/workspace/workspace-one");
+    dom.window.dispatchEvent(new dom.window.PopStateEvent("popstate"));
+    anchor.dispatchEvent(new dom.window.Event("pointerup", { bubbles: true })); await settle();
+    assert.equal(visible().length, 1);
+    assert.equal(visible()[0].shadowRoot?.querySelector<HTMLButtonElement>('[data-action="quote"]')?.disabled, true);
+    first(); await settle(); assert.equal(visible().length, 1);
+  } finally { second(); first(); await host.flush(); dom.window.close(); }
+});
+
+test("unload before installation discovery resolves cannot install DOM effects", async () => {
+  const { host } = await nativeHost();
+  const { dom } = setup();
+  let resolveOwner: ((owner: InstallationOwner) => void) | undefined;
+  let startup: AbortSignal | undefined;
+  const install = await selectionBar(host, ({ signal }) => { startup = signal; return new Promise((resolve) => { resolveOwner = resolve; }); });
+  const cleanup = install({ paseo: {}, openPanel() {} });
+  cleanup(); assert.equal(startup?.aborted, true);
+  resolveOwner?.(fixtureOwner); await settle();
+  assert.equal(dom.window.document.querySelector("[data-paseo-quote],[data-paseo-quote-chip],[data-paseo-sent-quotes]"), null);
+  await host.flush(); dom.window.close();
+});
 
 test("两文字入口立即添加、紧凑可选评论、连续输入，Enter/Esc/IME 不发送 Agent", async () => {
   const { host, resolveKeyboardFocusScope } = await nativeHost();
@@ -28,6 +71,7 @@ test("两文字入口立即添加、紧凑可选评论、连续输入，Enter/Es
   const install = await selectionBar(host);
   let sent = 0;
   const cleanup = install({ paseo: { agents: { ref: () => ({ send: () => { sent += 1; } }) } }, openPanel: () => {} });
+  await settle();
   const rect = { left: 100, top: 100, right: 200, bottom: 120, width: 100, height: 20, x: 100, y: 100, toJSON: () => ({}) };
   dom.window.Range.prototype.getClientRects = () => Object.assign([rect], { item: (index: number) => index === 0 ? rect : null });
   dom.window.Range.prototype.getBoundingClientRect = () => rect;
@@ -98,6 +142,7 @@ test("评论保存失败保留文本并重试同 ID，完成按钮 Escape 的 na
     flush: async () => { if (fail) throw new Error("fixture disk"); await host.flush(); },
   };
   const cleanup = (await selectionBar(controlled))({ paseo: {}, openPanel: () => {} });
+  await settle();
   const rect = { left: 100, top: 100, right: 200, bottom: 120, width: 100, height: 20, x: 100, y: 100, toJSON: () => ({}) };
   dom.window.Range.prototype.getClientRects = () => Object.assign([rect], { item: (index: number) => index === 0 ? rect : null });
   dom.window.Range.prototype.getBoundingClientRect = () => rect;
@@ -156,6 +201,7 @@ test("选区按钮的 Escape 不打断 Agent，失焦和 Escape 完成后保留�
   const { host, resolveKeyboardFocusScope } = await nativeHost();
   const { dom, input, anchor, binding } = setup();
   const cleanup = (await selectionBar(host))({ paseo: {}, openPanel: () => {} });
+  await settle();
   const rect = { left: 100, top: 100, right: 200, bottom: 120, width: 100, height: 20, x: 100, y: 100, toJSON: () => ({}) };
   dom.window.Range.prototype.getClientRects = () => Object.assign([rect], { item: (index: number) => index === 0 ? rect : null });
   dom.window.Range.prototype.getBoundingClientRect = () => rect;
